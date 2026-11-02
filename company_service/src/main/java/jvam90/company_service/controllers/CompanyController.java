@@ -24,9 +24,9 @@ public class CompanyController {
         return ResponseEntity.ok(companyService.findAll());
     }
 
-    @GetMapping("/{id}")
-    public ResponseEntity<Company> findCompanyById(@PathVariable Long id){
-        return this.companyService.findCompanyById(id)
+    @GetMapping("/{companyId}")
+    public ResponseEntity<Company> findCompanyById(@PathVariable Long companyId){
+        return this.companyService.findCompanyById(companyId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -36,23 +36,23 @@ public class CompanyController {
         Company companyCreated = this.companyService.addCompany(company);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
-                .path("/{id}")
+                .path("/{companyId}")
                 .buildAndExpand(company.getId())
                 .toUri();
         return ResponseEntity.created(location).body(companyCreated);
     }
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<String> deleteCompany(@PathVariable Long id){
-        if(this.companyService.deleteCompany(id)){
+    @DeleteMapping("/{companyId}")
+    public ResponseEntity<String> deleteCompany(@PathVariable Long companyId){
+        if(this.companyService.deleteCompany(companyId)){
             return ResponseEntity.ok("Company deleted successfully");
         }
         return ResponseEntity.notFound().build();
     }
 
-    @PutMapping("/{id}")
-    public ResponseEntity<String> updateCompany(@RequestBody Company company, @PathVariable Long id){
-        if(this.companyService.updateCompany(company, id)){
+    @PutMapping("/{companyId}")
+    public ResponseEntity<String> updateCompany(@RequestBody Company company, @PathVariable Long companyId){
+        if(this.companyService.updateCompany(company, companyId)){
             return ResponseEntity.ok("Company updated successfully");
         }
         return ResponseEntity.notFound().build();

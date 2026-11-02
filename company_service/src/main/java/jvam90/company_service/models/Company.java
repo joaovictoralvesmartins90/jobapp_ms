@@ -23,14 +23,6 @@ public class Company {
     @Column(length = 1000, nullable = false)
     private String description;
 
-    @JsonIgnore
-    @OneToMany(mappedBy = "company", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<Job> jobs = new ArrayList<>();
-
-    @JsonIgnore
-    @OneToMany(mappedBy = "company", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<Review> reviews = new ArrayList<>();
-
     public Company(String name, Integer employees, String description) {
         this.name = name;
         this.employees = employees;
@@ -73,19 +65,4 @@ public class Company {
         this.description = description;
     }
 
-    public List<Job> getJobs() {
-        return jobs;
-    }
-
-    public void setJobs(List<Job> jobs) {
-        this.jobs = jobs;
-    }
-
-    public List<Review> getReviews() {
-        return reviews;
-    }
-
-    public void setReviews(List<Review> reviews) {
-        this.reviews = reviews;
-    }
 }
