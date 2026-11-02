@@ -1,5 +1,6 @@
 package jvam90.review_service.controllers;
 
+import jakarta.websocket.server.PathParam;
 import jvam90.review_service.models.Review;
 import jvam90.review_service.services.ReviewService;
 import org.springframework.http.ResponseEntity;
@@ -10,7 +11,7 @@ import java.net.URI;
 import java.util.List;
 
 @RestController
-@RequestMapping("/reviews")
+@RequestMapping("/companies/{companyId}/reviews")
 public class ReviewController {
 
     private final ReviewService reviewService;
@@ -48,7 +49,7 @@ public class ReviewController {
     }
 
     @PostMapping()
-    public ResponseEntity<Review> addReview(@RequestBody Review review, @RequestParam Long companyId){
+    public ResponseEntity<Review> addReview(@RequestBody Review review, @PathVariable Long companyId){
         Review reviewCreated = this.reviewService.addReview(review, companyId);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
