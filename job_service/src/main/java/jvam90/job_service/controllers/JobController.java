@@ -34,7 +34,7 @@ public class JobController {
 
     @PostMapping()
     public ResponseEntity<Job> addJob(@RequestBody Job job, @PathVariable Long companyId){
-        Job jobCreated = this.jobService.addJob(job);
+        Job jobCreated = this.jobService.addJob(job, companyId);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{id}")

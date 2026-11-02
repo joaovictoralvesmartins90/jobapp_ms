@@ -11,12 +11,6 @@ import java.util.Optional;
 public class JobService implements IJobService {
 
     private final JobRepository jobRepository;
-    //private final CompanyService companyService;
-
-//    public JobService(JobRepository jobRepository, CompanyService companyService) {
-//        this.jobRepository = jobRepository;
-//        this.companyService = companyService;
-//    }
 
     public JobService(JobRepository jobRepository) {
         this.jobRepository = jobRepository;
@@ -36,9 +30,8 @@ public class JobService implements IJobService {
     }
 
     @Override
-    public Job addJob(Job job) {
-        //Optional<Company> company = companyService.findCompanyById(companyId);
-        //job.setCompany(company.get());
+    public Job addJob(Job job, Long companyId) {
+        job.setCompanyId(companyId);
         return jobRepository.save(job);
     }
 
@@ -49,15 +42,6 @@ public class JobService implements IJobService {
         this.jobRepository.delete(job);
         return true;
     }
-
-//    private Job getJob(Long companyId, Long jobId) {
-//        Optional<Company> company = companyService.findCompanyById(companyId);
-//        if(company.isEmpty()){
-//            return null;
-//        }
-//        Optional<Job> job = this.jobRepository.findById(jobId);
-//        return job.orElse(null);
-//    }
 
     private Job getJob(Long jobId) {
         Optional<Job> job = this.jobRepository.findById(jobId);
@@ -73,20 +57,8 @@ public class JobService implements IJobService {
         jobDb.setMinSalary(job.getMinSalary());
         jobDb.setMaxSalary(job.getMaxSalary());
         jobDb.setLocation(job.getLocation());
+        jobDb.setCompanyId(job.getCompanyId());
         jobRepository.save(jobDb);
         return true;
     }
-
-//    public boolean updateJob(Job job, Long companyId, Long jobId) {
-//        Job jobDb = getJob(companyId, jobId);
-//        if (jobDb == null) return false;
-//        jobDb.setTitle(job.getTitle());
-//        jobDb.setDescription(job.getDescription());
-//        jobDb.setMinSalary(job.getMinSalary());
-//        jobDb.setMaxSalary(job.getMaxSalary());
-//        jobDb.setLocation(job.getLocation());
-//        jobRepository.save(jobDb);
-//        return true;
-//    }
-
 }

@@ -27,12 +27,13 @@ public class Job {
 
     private Long companyId;
 
-    public Job(String title, String description, String minSalary, String maxSalary, String location) {
+    public Job(String title, String description, String minSalary, String maxSalary, String location, Long companyId) {
         this.title = title;
         this.description = description;
         this.minSalary = minSalary;
         this.maxSalary = maxSalary;
         this.location = location;
+        this.companyId = companyId;
     }
 
     public Job() {
@@ -91,7 +92,7 @@ public class Job {
         return companyId;
     }
 
-    public void setCompany(Long companyId) {
+    public void setCompanyId(Long companyId) {
         this.companyId = companyId;
     }
 }
