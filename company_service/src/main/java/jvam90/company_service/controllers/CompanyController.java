@@ -1,7 +1,7 @@
-package com.example.jobapp.controllers;
+package jvam90.company_service.controllers;
 
-import com.example.jobapp.models.Company;
-import com.example.jobapp.services.ICompanyService;
+import jvam90.company_service.models.Company;
+import jvam90.company_service.services.ICompanyService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;

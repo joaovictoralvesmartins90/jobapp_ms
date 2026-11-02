@@ -1,6 +1,6 @@
-package com.example.jobapp.repositories;
+package jvam90.company_service.repositories;
 
-import com.example.jobapp.models.Company;
+import jvam90.company_service.models.Company;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface CompanyRepository extends JpaRepository<Company, Long> {

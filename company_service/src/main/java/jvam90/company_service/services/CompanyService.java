@@ -1,11 +1,9 @@
-package com.example.jobapp.services;
+package jvam90.company_service.services;
 
-import com.example.jobapp.models.Company;
-import com.example.jobapp.repositories.CompanyRepository;
+import jvam90.company_service.models.Company;
+import jvam90.company_service.repositories.CompanyRepository;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 

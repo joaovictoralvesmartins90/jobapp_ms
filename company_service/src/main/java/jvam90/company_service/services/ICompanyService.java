@@ -1,6 +1,7 @@
-package com.example.jobapp.services;
+package jvam90.company_service.services;
 
-import com.example.jobapp.models.Company;
+
+import jvam90.company_service.models.Company;
 
 import java.util.List;
 import java.util.Optional;
