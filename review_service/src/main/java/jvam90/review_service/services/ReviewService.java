@@ -21,27 +21,19 @@ public class ReviewService implements IReviewService{
     }
 
     @Override
-    public Optional<Review> findById(Long companyId, Long reviewId) {
-        return reviewRepository.findByCompanyId(companyId)
-                .stream()
-                .filter(review -> review.getId().equals(reviewId))
-                .findFirst();
+    public Optional<Review> findById(Long reviewId) {
+        return reviewRepository.findById(reviewId);
     }
 
     @Override
     public Review addReview(Review review, Long companyId) {
-        Company company = companyService.findCompanyById(companyId).get();
-        review.setCompany(company);
+        review.setCompanyId(companyId);
         return reviewRepository.save(review);
     }
 
 
     @Override
-    public boolean deleteReview(Long reviewId, Long companyId) {
-        Optional<Company> company = companyService.findCompanyById(companyId);
-        if(company.isEmpty()){
-            return false;
-        }
+    public boolean deleteReview(Long reviewId) {
         Optional<Review> review = reviewRepository.findById(reviewId);
         if (review.isEmpty()){
             return false;
@@ -51,11 +43,7 @@ public class ReviewService implements IReviewService{
     }
 
     @Override
-    public boolean updateReview(Review review, Long companyId, Long reviewId) {
-        Optional<Company> company = companyService.findCompanyById(companyId);
-        if(company.isEmpty()){
-            return false;
-        }
+    public boolean updateReview(Review review, Long reviewId) {
         Optional<Review> reviewDb = reviewRepository.findById(reviewId);
         if (reviewDb.isEmpty()){
             return false;
@@ -64,7 +52,7 @@ public class ReviewService implements IReviewService{
         reviewUpdate.setTitle(review.getTitle());
         reviewUpdate.setDescription(review.getTitle());
         reviewUpdate.setRating(review.getRating());
-        reviewUpdate.setCompany(company.get());
+        reviewUpdate.setCompanyId(review.getCompanyId());
         reviewRepository.save(reviewUpdate);
         return true;
     }

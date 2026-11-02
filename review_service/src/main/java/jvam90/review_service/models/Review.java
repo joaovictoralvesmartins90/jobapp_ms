@@ -54,5 +54,5 @@ public class Review {
     public LocalDateTime getCreatedAt() { return createdAt; }
 
     public Long getCompanyId() { return companyId; }
-    public void setCompany(Long companyId) { this.companyId = companyId; }
+    public void setCompanyId(Long companyId) { this.companyId = companyId; }
 }
