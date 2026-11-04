@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "jobapp",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "jobapp",
+      "Username": "admin",
+      "SSLMode": "prefer"
+    }
+  }
+}

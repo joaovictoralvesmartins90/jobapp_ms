@@ -1,5 +1,6 @@
 package jvam90.job_service.controllers;
 
+import jvam90.job_service.dtos.JobWithCompanyDto;
 import jvam90.job_service.models.Job;
 import jvam90.job_service.services.IJobService;
 import org.springframework.http.HttpStatus;
@@ -21,7 +22,7 @@ public class JobController {
     }
 
     @GetMapping()
-    public ResponseEntity<List<Job>> findAll(@PathVariable Long companyId){
+    public ResponseEntity<List<JobWithCompanyDto>> findAll(@PathVariable Long companyId){
         return new ResponseEntity<>(this.jobService.findAll(companyId), HttpStatus.OK) ;
     }
 

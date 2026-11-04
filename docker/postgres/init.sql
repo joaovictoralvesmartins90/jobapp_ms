@@ -1,0 +1,3 @@
+CREATE DATABASE companydb;
+CREATE DATABASE jobdb;
+CREATE DATABASE reviewdb;
