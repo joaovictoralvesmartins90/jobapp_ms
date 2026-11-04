@@ -1,10 +1,12 @@
 package jvam90.job_service.services;
 
 import jvam90.job_service.dtos.CompanyDto;
+import jvam90.job_service.dtos.CreateJobDto;
 import jvam90.job_service.dtos.JobDto;
 import jvam90.job_service.dtos.JobWithCompanyDto;
 import jvam90.job_service.models.Job;
 import jvam90.job_service.repositories.JobRepository;
+import jvam90.job_service.util.JobMapper;
 import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -60,9 +62,10 @@ public class JobService implements IJobService {
     }
 
     @Override
-    public Job addJob(Job job, Long companyId) {
-        job.setCompanyId(companyId);
-        return jobRepository.save(job);
+    public Job addJob(CreateJobDto createJobDto, Long companyId) {
+        createJobDto.setCompanyId(companyId);
+        Job mappedJob = JobMapper.mapFromDto(createJobDto);
+        return jobRepository.save(mappedJob);
     }
 
     @Override

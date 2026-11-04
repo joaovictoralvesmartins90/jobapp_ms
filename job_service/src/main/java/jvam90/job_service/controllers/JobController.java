@@ -1,8 +1,10 @@
 package jvam90.job_service.controllers;
 
+import jvam90.job_service.dtos.CreateJobDto;
 import jvam90.job_service.dtos.JobWithCompanyDto;
 import jvam90.job_service.models.Job;
 import jvam90.job_service.services.IJobService;
+import jvam90.job_service.util.JobMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -34,14 +36,15 @@ public class JobController {
     }
 
     @PostMapping()
-    public ResponseEntity<Job> addJob(@RequestBody Job job, @PathVariable Long companyId){
-        Job jobCreated = this.jobService.addJob(job, companyId);
+    public ResponseEntity<CreateJobDto> addJob(@RequestBody CreateJobDto createJobDto, @PathVariable Long companyId){
+        Job jobCreated = this.jobService.addJob(createJobDto, companyId);
+        CreateJobDto mappedDto = JobMapper.mapFromClass(jobCreated);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{id}")
-                .buildAndExpand(job.getId())
+                .buildAndExpand(jobCreated.getId())
                 .toUri();
-        return ResponseEntity.created(location).body(jobCreated);
+        return ResponseEntity.created(location).body(mappedDto);
     }
 
     @DeleteMapping("/{jobId}")
