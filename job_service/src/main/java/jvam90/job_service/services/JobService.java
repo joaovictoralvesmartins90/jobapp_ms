@@ -1,5 +1,6 @@
 package jvam90.job_service.services;
 
+import jvam90.job_service.clients.CompanyClient;
 import jvam90.job_service.dtos.CompanyDto;
 import jvam90.job_service.dtos.CreateJobDto;
 import jvam90.job_service.dtos.JobDto;
@@ -24,8 +25,11 @@ public class JobService implements IJobService {
     @Autowired
     RestTemplate restTemplate;
 
-    public JobService(JobRepository jobRepository) {
+    private CompanyClient companyClient;
+
+    public JobService(JobRepository jobRepository, CompanyClient companyClient) {
         this.jobRepository = jobRepository;
+        this.companyClient = companyClient;
     }
 
     @Override
@@ -65,7 +69,7 @@ public class JobService implements IJobService {
         if(jobFromDb == null){
             return null;
         }
-        CompanyDto companyDto = restTemplate.getForObject("http://company-service/companies/" + jobFromDb.getCompanyId(), CompanyDto.class);
+        CompanyDto companyDto = companyClient.getCompany(jobFromDb.getCompanyId());
         return getJobWithCompanyDto(jobFromDb, companyDto);
     }
 
