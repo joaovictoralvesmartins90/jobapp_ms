@@ -8,6 +8,7 @@ import jvam90.job_service.models.Job;
 import jvam90.job_service.repositories.JobRepository;
 import jvam90.job_service.util.JobMapper;
 import org.jspecify.annotations.NonNull;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -20,6 +21,9 @@ public class JobService implements IJobService {
 
     private final JobRepository jobRepository;
 
+    @Autowired
+    RestTemplate restTemplate;
+
     public JobService(JobRepository jobRepository) {
         this.jobRepository = jobRepository;
     }
@@ -28,10 +32,9 @@ public class JobService implements IJobService {
     public List<JobWithCompanyDto> findAll(Long companyId) {
         List<Job> jobs = jobRepository.findByCompanyId(companyId);
         List<JobWithCompanyDto> jobWithCompanyDtos = new ArrayList<>();
-        RestTemplate restTemplate = new RestTemplate();
 
         for(Job job : jobs){
-            CompanyDto companyDto = restTemplate.getForObject("http://localhost:8081/companies/" + job.getCompanyId(), CompanyDto.class);
+            CompanyDto companyDto = restTemplate.getForObject("http://company-service/companies/" + job.getCompanyId(), CompanyDto.class);
             JobWithCompanyDto jobWithCompanyDto = getJobWithCompanyDto(job, companyDto);
             jobWithCompanyDtos.add(jobWithCompanyDto);
         }
