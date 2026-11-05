@@ -28,4 +28,5 @@ public class JobMapper {
         mappedJob.setCompanyId(job.getCompanyId());
         return mappedJob;
     }
+
 }

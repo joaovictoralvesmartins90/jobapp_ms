@@ -57,11 +57,16 @@ public class JobService implements IJobService {
     }
 
     @Override
-    public Optional<Job> findJobById(Long jobId) {
-        return jobRepository.findById(jobId)
+    public JobWithCompanyDto findJobById(Long jobId) {
+        Job jobFromDb = jobRepository.findById(jobId)
                 .stream()
                 .filter(job -> job.getId().equals(jobId))
-                .findFirst();
+                .findFirst().orElse(null);
+        if(jobFromDb == null){
+            return null;
+        }
+        CompanyDto companyDto = restTemplate.getForObject("http://company-service/companies/" + jobFromDb.getCompanyId(), CompanyDto.class);
+        return getJobWithCompanyDto(jobFromDb, companyDto);
     }
 
     @Override

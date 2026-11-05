@@ -9,7 +9,7 @@ import java.util.Optional;
 
 public interface IJobService {
     List<JobWithCompanyDto> findAll(Long companyId);
-    Optional<Job> findJobById(Long jobId);
+    JobWithCompanyDto findJobById(Long jobId);
     Job addJob(CreateJobDto job, Long companyId);
     boolean deleteJob(Long id);
     boolean updateJob(Job job, Long jobId);

@@ -29,10 +29,12 @@ public class JobController {
     }
 
     @GetMapping("/{jobId}")
-    public ResponseEntity<Job> findJobById(@PathVariable Long companyId, @PathVariable Long jobId){
-        return this.jobService.findJobById(jobId)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<JobWithCompanyDto> findJobById(@PathVariable Long companyId, @PathVariable Long jobId){
+        JobWithCompanyDto jobWithCompanyDto = this.jobService.findJobById(jobId);
+        if(jobWithCompanyDto == null){
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(jobWithCompanyDto);
     }
 
     @PostMapping()
