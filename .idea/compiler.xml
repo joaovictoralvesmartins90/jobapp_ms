@@ -6,6 +6,7 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
+        <module name="config-server" />
         <module name="company_service" />
         <module name="job_service" />
         <module name="service-registry" />
@@ -16,6 +17,7 @@
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
       <module name="company_service" options="-parameters" />
+      <module name="config-server" options="-parameters" />
       <module name="job_service" options="-parameters" />
       <module name="review_service" options="-parameters" />
       <module name="service-registry" options="-parameters" />
