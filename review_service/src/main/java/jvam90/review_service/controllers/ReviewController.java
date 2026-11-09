@@ -21,7 +21,7 @@ public class ReviewController {
     }
 
     @GetMapping()
-    public ResponseEntity<List<Review>> getAll(@RequestParam Long companyId){
+    public ResponseEntity<List<Review>> getAll(@PathVariable Long companyId){
         return ResponseEntity.ok(reviewService.findAll(companyId));
     }
 
