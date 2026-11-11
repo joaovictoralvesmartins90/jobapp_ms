@@ -1,5 +1,6 @@
 package jvam90.job_service.services;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import jvam90.job_service.clients.CompanyClient;
 import jvam90.job_service.dtos.CompanyDto;
 import jvam90.job_service.dtos.CreateJobDto;
@@ -33,16 +34,22 @@ public class JobService implements IJobService {
     }
 
     @Override
+    @CircuitBreaker(name = "companyBreaker", fallbackMethod = "companyBreakerFallback")
     public List<JobWithCompanyDto> findAll(Long companyId) {
         List<Job> jobs = jobRepository.findByCompanyId(companyId);
         List<JobWithCompanyDto> jobWithCompanyDtos = new ArrayList<>();
 
         for(Job job : jobs){
-            CompanyDto companyDto = restTemplate.getForObject("http://company-service/companies/" + job.getCompanyId(), CompanyDto.class);
+            CompanyDto companyDto = companyClient.getCompany(job.getCompanyId());
             JobWithCompanyDto jobWithCompanyDto = getJobWithCompanyDto(job, companyDto);
             jobWithCompanyDtos.add(jobWithCompanyDto);
         }
         return jobWithCompanyDtos;
+    }
+
+    // Mesmos parâmetros de findAll + a exceção no final; mesmo tipo de retorno
+    public List<JobWithCompanyDto> companyBreakerFallback(Long companyId, Throwable ex) {
+        return new ArrayList<>();
     }
 
     private static @NonNull JobWithCompanyDto getJobWithCompanyDto(Job job, CompanyDto companyDto) {
