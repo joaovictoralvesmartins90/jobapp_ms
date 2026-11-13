@@ -1,6 +1,7 @@
 package jvam90.review_service.controllers;
 
 import jakarta.websocket.server.PathParam;
+import jvam90.review_service.messaging.producer.ReviewMessageProducer;
 import jvam90.review_service.models.Review;
 import jvam90.review_service.services.ReviewService;
 import org.springframework.http.ResponseEntity;
@@ -15,9 +16,11 @@ import java.util.List;
 public class ReviewController {
 
     private final ReviewService reviewService;
+    private final ReviewMessageProducer reviewMessageProducer;
 
-    public ReviewController(ReviewService reviewService) {
+    public ReviewController(ReviewService reviewService, ReviewMessageProducer reviewMessageProducer) {
         this.reviewService = reviewService;
+        this.reviewMessageProducer = reviewMessageProducer;
     }
 
     @GetMapping()
@@ -41,7 +44,7 @@ public class ReviewController {
     }
 
     @PutMapping("/{reviewId}")
-    public ResponseEntity<String> updateCompany(@RequestBody Review review, @PathVariable Long reviewId){
+    public ResponseEntity<String> updateReview(@RequestBody Review review, @PathVariable Long reviewId){
         if(this.reviewService.updateReview(review, reviewId)){
             return ResponseEntity.ok("Company updated successfully");
         }
@@ -56,6 +59,13 @@ public class ReviewController {
                 .path("/{id}")
                 .buildAndExpand(reviewCreated.getId())
                 .toUri();
+        reviewMessageProducer.sendMessage(reviewCreated);
         return ResponseEntity.created(location).body(reviewCreated);
+    }
+
+    @GetMapping("/averagerating")
+    public Double getAverageReview(@PathVariable Long companyId){
+        List<Review> reviewList = reviewService.findAll(companyId);
+        return reviewList.stream().mapToDouble(Review::getRating).average().orElse(0.0);
     }
 }

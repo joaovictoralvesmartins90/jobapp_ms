@@ -23,6 +23,9 @@ public class Company {
     @Column(length = 1000, nullable = false)
     private String description;
 
+    @Column
+    private Double averageRating;
+
     public Company(String name, Integer employees, String description) {
         this.name = name;
         this.employees = employees;
@@ -65,4 +68,11 @@ public class Company {
         this.description = description;
     }
 
+    public Double getAverageRating() {
+        return averageRating;
+    }
+
+    public void setAverageRating(Double averageRating) {
+        this.averageRating = averageRating;
+    }
 }

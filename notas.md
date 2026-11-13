@@ -14,6 +14,7 @@
 10. [Gerenciamento de configurações (Config Server)](#10-gerenciamento-de-configurações-config-server)
 11. [API Gateway](#11-api-gateway)
 12. [Tolerância a falhas e Circuit Breaker](#12-tolerância-a-falhas-e-circuit-breaker)
+13. [Filas de mensagem (Message Queues)](#13-filas-de-mensagem-message-queues)
 
 ---
 
@@ -1250,3 +1251,278 @@ Quando o limite é excedido, a chamada lança `RequestNotPermitted`. Com `fallba
 | `/actuator/health` | Os mesmos dados em `components.circuitBreakers` |
 
 A `failureRate` aparece como `-1.0%` até atingir `minimumNumberOfCalls`.
+
+---
+
+## 13. Filas de mensagem (Message Queues)
+
+Imagine dois serviços que trocam mensagens entre si. Em um determinado período, um deles fica fora do ar, impossibilitando a comunicação síncrona.
+
+Uma solução é a **comunicação assíncrona** por meio de uma fila de mensagens com RabbitMQ. Quando um serviço precisa se comunicar, envia a mensagem para a fila. Quando o outro estiver disponível, consome a mensagem da fila e a processa.
+
+### O que é
+
+Uma forma de comunicação entre serviços por meio de mensagens, usada em arquiteturas de microsserviços e serverless.
+
+| Papel | Descrição |
+|---|---|
+| **Produtor** (producer) | Serviço que produz uma mensagem e a adiciona a uma fila |
+| **Consumidor** (consumer) | Serviço que lê as mensagens da fila |
+| **Message broker** | Software que permite a comunicação assíncrona por mensagens, gerenciando o armazenamento e o roteamento delas |
+
+Neste projeto o broker é o **RabbitMQ**. Outras opções: Apache Kafka, Amazon SQS e ActiveMQ.
+
+### Vantagens
+
+| Vantagem | Descrição |
+|---|---|
+| **Desacoplamento** | Cada serviço pode trabalhar de forma isolada |
+| **Comunicação assíncrona** | As mensagens são enviadas sem a necessidade de esperar que sejam processadas imediatamente |
+| **Escalabilidade** | Serviços desacoplados podem ser escalados individualmente |
+| **Tolerância a falhas** | Não é preciso aguardar uma resposta imediata; os serviços continuam atuando normalmente |
+| **Arquitetura orientada a eventos** | Os serviços se inscrevem em eventos e "reagem" a eles |
+| **Desacoplamento de tempo** | O processamento pode ocorrer em momentos diferentes, ajudando em períodos de alta carga |
+
+> **Fallback não substitui fila:** dependendo da situação, métodos de fallback não são uma alternativa 100% válida ao uso de filas. O fallback é uma execução alternativa quando algo dá errado. Uma fila pode ser usada por motivos diversos, como comunicação assíncrona ou para desafogar eventos em períodos de alto tráfego.
+
+### Exemplo de aplicação
+
+Uma empresa possui um campo `notaMedia`, calculado a partir das notas das avaliações, que chegam por outro serviço. Cada vez que uma avaliação é enviada, esse campo precisa ser atualizado.
+
+Com comunicação síncrona, o processo pode ficar lento, e se um dos serviços estiver fora do ar, a operação falha. Por isso, será usada uma fila:
+
+```
+review-service  → envia para a fila uma mensagem com a nota da avaliação (producer)
+company-service → consome a mensagem da fila e atualiza a nota média      (consumer)
+```
+
+### RabbitMQ com Docker
+
+No `docker-compose.yaml`:
+
+```yaml
+rabbitmq:
+  image: rabbitmq:4-management
+  container_name: rabbitmq
+  ports:
+    - "5672:5672"
+    - "15672:15672"
+  networks:
+    - postgres
+```
+
+| Porta | Uso |
+|---|---|
+| `5672` | Porta padrão do RabbitMQ |
+| `15672` | RabbitMQ Management (http://localhost:15672/). Usuário e senha: `guest` |
+
+### Dependências
+
+Nas dependências do Spring, procure por **Spring for RabbitMQ**:
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-amqp</artifactId>
+</dependency>
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-amqp-test</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+### Propriedades
+
+No `application.properties` de cada serviço que usa o RabbitMQ:
+
+```properties
+# RabbitMQ
+spring.rabbitmq.host=localhost
+spring.rabbitmq.port=5672
+spring.rabbitmq.username=guest
+spring.rabbitmq.password=guest
+```
+
+### Configuração
+
+O objetivo é fazer o review-service enviar para a fila uma mensagem com a nota, e o company-service consumir essa mensagem e calcular a nota geral da empresa. Antes de tudo, é preciso configurar o RabbitMQ na aplicação com uma classe `@Configuration`:
+
+```java
+package jvam90.review_service.messaging;
+
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class RabbitMQConfiguration {
+
+    @Bean
+    public Queue companyRatingQueue() {
+        return new Queue("companyRatingQueue");
+    }
+
+    @Bean
+    public MessageConverter messageConverter() {
+        return new JacksonJsonMessageConverter();
+    }
+
+    @Bean
+    public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory) {
+        RabbitTemplate rabbitTemplate = new RabbitTemplate(connectionFactory);
+        rabbitTemplate.setMessageConverter(messageConverter());
+        return rabbitTemplate;
+    }
+}
+```
+
+São três métodos, todos com `@Bean`, pois são objetos gerenciados pelo Spring:
+
+| Bean | Função |
+|---|---|
+| `companyRatingQueue` | Cria a fila |
+| `messageConverter` | Converte as mensagens de Java para JSON |
+| `rabbitTemplate` | Envia as mensagens, usando o conversor acima |
+
+### A mensagem (DTO)
+
+A mensagem é um DTO com apenas o que se quer enviar:
+
+```java
+public class ReviewMessage {
+    private Long id;
+    private String title;
+    private String description;
+    private double rating;
+    private Long companyId;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public double getRating() {
+        return rating;
+    }
+
+    public void setRating(double rating) {
+        this.rating = rating;
+    }
+
+    public Long getCompanyId() {
+        return companyId;
+    }
+
+    public void setCompanyId(Long companyId) {
+        this.companyId = companyId;
+    }
+}
+```
+
+### Produtor
+
+Quem envia a mensagem é o produtor. A classe monta a mensagem e a envia para uma fila com o `RabbitTemplate`:
+
+```java
+package jvam90.review_service.messaging.producer;
+
+import jvam90.review_service.messaging.dto.ReviewMessage;
+import jvam90.review_service.models.Review;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.stereotype.Service;
+
+@Service
+public class ReviewMessageProducer {
+    private final RabbitTemplate rabbitTemplate;
+
+    public ReviewMessageProducer(RabbitTemplate rabbitTemplate) {
+        this.rabbitTemplate = rabbitTemplate;
+    }
+
+    public void sendMessage(Review review) {
+        ReviewMessage reviewMessage = new ReviewMessage();
+        reviewMessage.setId(review.getId());
+        reviewMessage.setTitle(review.getTitle());
+        reviewMessage.setDescription(review.getDescription());
+        reviewMessage.setRating(review.getRating());
+        reviewMessage.setCompanyId(review.getCompanyId());
+        rabbitTemplate.convertAndSend("companyRatingQueue", reviewMessage);
+    }
+}
+```
+
+Para usar, no controlador do review-service:
+
+```java
+private final ReviewMessageProducer reviewMessageProducer;
+
+@PostMapping()
+public ResponseEntity<Review> addReview(@RequestBody Review review, @PathVariable Long companyId) {
+    Review reviewCreated = this.reviewService.addReview(review, companyId);
+    URI location = ServletUriComponentsBuilder
+            .fromCurrentRequest()
+            .path("/{id}")
+            .buildAndExpand(reviewCreated.getId())
+            .toUri();
+    reviewMessageProducer.sendMessage(reviewCreated);
+    return ResponseEntity.created(location).body(reviewCreated);
+}
+```
+
+### Consumidor
+
+O serviço consumidor tem basicamente a mesma classe de configuração do RabbitMQ e o mesmo DTO da mensagem. A diferença é a classe consumidora:
+
+```java
+package jvam90.company_service.messaging;
+
+import jvam90.company_service.messaging.dto.ReviewMessage;
+import jvam90.company_service.services.CompanyService;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.stereotype.Service;
+
+@Service
+public class ReviewMessageConsumer {
+    private final CompanyService companyService;
+
+    public ReviewMessageConsumer(CompanyService companyService) {
+        this.companyService = companyService;
+    }
+
+    @RabbitListener(queues = "companyRatingQueue")
+    public void consumeMessage(ReviewMessage reviewMessage) {
+        companyService.updateCompanyRating(reviewMessage);
+    }
+}
+```
+
+O `@RabbitListener(queues = "companyRatingQueue")` faz o método "escutar" a fila: sempre que chega uma mensagem nova, `consumeMessage` é executado.
+
+### Verificando
+
+Acesse http://localhost:15672, vá em **Queues and Streams** e verifique que existe a fila `companyRatingQueue` com uma mensagem pronta para ser consumida (**Ready**).

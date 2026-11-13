@@ -1,5 +1,7 @@
 package jvam90.company_service.services;
 
+import jvam90.company_service.clients.ReviewClient;
+import jvam90.company_service.messaging.dto.ReviewMessage;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.repositories.CompanyRepository;
 import org.springframework.stereotype.Service;
@@ -11,9 +13,11 @@ import java.util.Optional;
 public class CompanyService implements ICompanyService{
 
     private final CompanyRepository companyRepository;
+    private final ReviewClient reviewClient;
 
-    public CompanyService(CompanyRepository companyRepository) {
+    public CompanyService(CompanyRepository companyRepository, ReviewClient reviewClient) {
         this.companyRepository = companyRepository;
+        this.reviewClient = reviewClient;
     }
 
     @Override
@@ -62,5 +66,17 @@ public class CompanyService implements ICompanyService{
         companyRepository.save(companyToUpdate);
         return true;
 
+    }
+
+    @Override
+    public boolean updateCompanyRating(ReviewMessage reviewMessage) {
+        Company company = companyRepository.findById(reviewMessage.getCompanyId()).orElse(null);
+        if(company != null){
+            Double avgRating = reviewClient.getAverageRating(company.getId());
+            company.setAverageRating(avgRating);
+            companyRepository.save(company);
+            return true;
+        }
+        return false;
     }
 }
