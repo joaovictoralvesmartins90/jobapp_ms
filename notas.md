@@ -15,6 +15,7 @@
 11. [API Gateway](#11-api-gateway)
 12. [Tolerância a falhas e Circuit Breaker](#12-tolerância-a-falhas-e-circuit-breaker)
 13. [Filas de mensagem (Message Queues)](#13-filas-de-mensagem-message-queues)
+14. [Kubernetes](#14-kubernetes)
 
 ---
 
@@ -1526,3 +1527,259 @@ O `@RabbitListener(queues = "companyRatingQueue")` faz o método "escutar" a fil
 ### Verificando
 
 Acesse http://localhost:15672, vá em **Queues and Streams** e verifique que existe a fila `companyRatingQueue` com uma mensagem pronta para ser consumida (**Ready**).
+
+---
+
+## 14. Kubernetes
+
+**Kubernetes** (ou **K8s**) é uma plataforma de **orquestração de containers**. Ele gerencia o ciclo de vida de aplicações que rodam em containers, com escalabilidade, previsibilidade e alta disponibilidade. Também permite definir como as aplicações interagem com o ambiente fora dos containers.
+
+### Benefícios
+
+| Benefício | Descrição |
+|---|---|
+| **Descoberta de serviços e balanceamento de carga** | Os pods são encontrados por nome e o tráfego é distribuído entre eles |
+| **Rollouts e rollbacks automatizados** | Novas versões entram aos poucos e, se algo der errado, dá para voltar à anterior |
+| **Escalabilidade horizontal** | Aumentar ou diminuir o número de instâncias da aplicação com um comando |
+| **Auto-regeneração** (self-healing) | O Kubernetes verifica o tempo todo se os containers estão saudáveis e tenta recuperá-los quando não estão |
+| **Gerenciamento de segredos** | Senhas, tokens e chaves ficam guardados à parte da aplicação |
+
+### Arquitetura
+
+Um **cluster** (conjunto de nós) tem duas partes: o **painel de controle** (control plane) e os **nós trabalhadores** (worker nodes).
+
+```
+┌──────────────────── Cluster ─────────────────────┐
+│                                                  │
+│  Painel de controle                              │
+│  ┌────────────────────────────────────────────┐  │
+│  │ API Server · etcd · Scheduler ·            │  │
+│  │ Controller Manager                         │  │
+│  └────────────────────────────────────────────┘  │
+│                      ▲                           │
+│                      │                           │
+│  Worker node         │        Worker node        │
+│  ┌──────────────────────┐  ┌──────────────────┐  │
+│  │ kubelet · kube-proxy │  │ kubelet · ...    │  │
+│  │ container runtime    │  │                  │  │
+│  │ [pod] [pod] [pod]    │  │ [pod] [pod]      │  │
+│  └──────────────────────┘  └──────────────────┘  │
+└──────────────────────────────────────────────────┘
+```
+
+#### Painel de controle
+
+Gerencia o estado do cluster e a comunicação com os nós.
+
+| Componente | Função |
+|---|---|
+| **Servidor de API** (kube-apiserver) | Ponto central da comunicação entre o painel de controle e os nós. Todo comando (inclusive o `kubectl`) passa por ele |
+| **etcd** | Armazenamento chave-valor que guarda o estado de todo o cluster. Se o cluster for reiniciado, o último estado está lá |
+| **Agendador** (kube-scheduler) | Decide em qual nó cada pod vai rodar, distribuindo a carga entre os nós |
+| **Gerenciador de controladores** (kube-controller-manager) | Compara o estado atual do cluster com o estado desejado e age para que os dois fiquem iguais |
+
+#### Nó trabalhador (worker node)
+
+Executa os containers e as aplicações dentro deles.
+
+> **worker node = kubelet + kube-proxy + container runtime + pods**
+
+| Componente | Função |
+|---|---|
+| **kubelet** | Gerencia o nó e a comunicação dele com o painel de controle. Garante que os containers dos pods estão rodando |
+| **kube-proxy** | Agente de rede de cada nó. Mantém as regras que levam o tráfego de um Service até os pods certos, atuando na descoberta de serviços |
+| **Container runtime** | Software que de fato executa os containers (ex.: containerd) |
+| **Pods** | Menor unidade do Kubernetes. Cada pod tem um ou mais containers |
+
+### Rodando localmente com Minikube
+
+O **Minikube** cria um cluster Kubernetes local, de um nó só.
+
+> **Só para desenvolvimento:** o Minikube não deve ser usado em produção. Em produção, normalmente se usa o Kubernetes gerenciado de um provedor de cloud, como Azure (AKS) ou AWS (EKS).
+
+O Minikube tem uma interface web para gerenciar o cluster e ver os recursos de forma visual:
+
+```bash
+minikube dashboard
+```
+
+### Pod
+
+É a **menor unidade** do Kubernetes: um ou mais containers mais os recursos que eles compartilham (volumes, IP, portas etc.).
+
+Características:
+
+- Os containers de um mesmo pod rodam **no mesmo nó** e têm **o mesmo ciclo de vida**.
+- Containers do **mesmo pod** se comunicam por `localhost`.
+- Cada pod tem um **IP único dentro do cluster**. Pods diferentes se comunicam por esse IP ou, melhor, por um **Service** (ver abaixo).
+- **Não é uma entidade durável:** pods são criados e destruídos dinamicamente, e o IP muda quando um pod é recriado.
+- Devem ser pensados como **stateless**: dados que precisam sobreviver ficam em volumes ou fora do pod.
+- **Não escalam sozinhos:** a escalabilidade horizontal vem de replicar pods (ver ReplicaSet e Deployment).
+- O Kubernetes gerencia o ciclo de vida dos pods, que podem ter **labels** e **annotations** associados.
+
+Exemplo de definição de um pod:
+
+```yaml
+apiVersion: v1          # versão da API
+kind: Pod               # tipo do recurso
+metadata:               # informações do pod
+  name: my-pod
+spec:                   # especificação dos containers do pod
+  containers:           # lista: é possível declarar mais de um container
+    - name: nginx       # nome do container
+      image: nginx:1.14.2   # imagem do container
+      ports:
+        - containerPort: 80 # porta do container
+```
+
+Para criar o pod a partir do arquivo:
+
+```bash
+kubectl apply -f <arquivo>.yml
+# pod/my-pod created
+```
+
+Para listar os pods do cluster:
+
+```bash
+kubectl get pods       # lista uma vez
+kubectl get pods -w    # modo "watch": continua mostrando as mudanças
+```
+
+> **Pods são (quase) imutáveis:** depois de criado, não é possível adicionar ou remover containers de um pod. Isso preserva a identidade do pod dentro do cluster. Para mudar os containers, cria-se outro pod (na prática, quem faz isso é o Deployment).
+
+### Service
+
+Um **Service** é um conjunto lógico de pods somado a uma política de acesso a eles. Como os pods são efêmeros e mudam de IP, o Service oferece um **IP fixo e um nome DNS** para acessá-los, sem que quem chama precise saber o endereço de cada pod.
+
+> Não confundir com "microsserviço": o Service do Kubernetes é a forma de **expor** pods na rede. Normalmente cada microsserviço da aplicação tem um Service na frente dos seus pods.
+
+Os pods são escolhidos pelo **selector**, que procura pods com os mesmos labels:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  selector:
+    app: my-app          # direciona para os pods com o label app=my-app
+  ports:
+    - protocol: TCP
+      port: 80           # porta do Service
+      targetPort: 9376   # porta do container nos pods
+```
+
+#### Tipos de Service
+
+| Tipo | Descrição |
+|---|---|
+| **ClusterIP** (padrão) | Expõe o Service só **dentro** do cluster, para outros pods se comunicarem com ele. Sem acesso externo |
+| **NodePort** | Expõe o Service numa porta fixa em cada nó. Permite acesso externo chamando `<IP de qualquer nó>:<porta>` |
+| **LoadBalancer** | Expõe o Service externamente usando o balanceador de carga do provedor de cloud (AWS, Azure), levando o tráfego de fora para dentro do cluster |
+| **ExternalName** | Mapeia o Service para um nome DNS externo, em vez de usar seletores de pods |
+
+### ReplicaSet
+
+Objeto que **mantém um número fixo de pods idênticos** rodando.
+
+| Vantagem | Descrição |
+|---|---|
+| **Alta disponibilidade** | Se um pod falha, outro toma o lugar dele |
+| **Balanceamento de carga** | Pods idênticos dividem o tráfego (junto com um Service) |
+| **Escalabilidade horizontal** | Basta mudar a quantidade de réplicas |
+| **Resiliência** | Como os pods são efêmeros, ter réplicas garante que a aplicação como um todo continue disponível |
+
+Como funciona:
+
+- O desenvolvedor define **quantas réplicas** devem existir.
+- O ReplicaSet usa um **selector** (labels) para identificar os pods que gerencia.
+- Se um pod gerenciado for apagado, o ReplicaSet **cria outro automaticamente** para manter a quantidade definida.
+
+O que ele **não** faz:
+
+- Não foi feito para **rolling updates** ou deployments.
+- Não atualiza os pods que gerencia: como pods são imutáveis, é preciso criar novos.
+
+Por isso, ReplicaSets são usados **junto com Deployments**. Se a configuração dos pods muda, use um Deployment em vez de um ReplicaSet direto.
+
+```yaml
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: frontend-replicaset
+  labels:
+    app: frontend
+spec:
+  # Número desejado de pods idênticos rodando
+  replicas: 3
+
+  # Seletor para identificar quais pods este ReplicaSet gerencia
+  selector:
+    matchLabels:
+      app: frontend
+
+  # Template usado para criar novos pods quando necessário
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: nginx-container
+          image: nginx:1.26.1
+          ports:
+            - containerPort: 80
+```
+
+### Deployment
+
+Objeto de alto nível que **gerencia ReplicaSets** e oferece **atualizações declarativas**, cuidando do ciclo de vida de aplicações em containers.
+
+Você descreve o **estado desejado** (qual imagem usar, quantas réplicas, como atualizar), e o controlador do Kubernetes trabalha por trás dos panos para deixar o estado atual igual ao descrito.
+
+```
+Deployment  →  cria/gerencia  →  ReplicaSet  →  cria/gerencia  →  Pods
+```
+
+1. Você define a configuração no Deployment.
+2. O Deployment cria um ReplicaSet com a quantidade de réplicas especificada.
+3. O ReplicaSet gerencia os pods.
+
+Ao mudar a imagem, por exemplo, o Deployment cria um ReplicaSet novo e vai migrando os pods do antigo para ele.
+
+#### Vantagens
+
+- Auto-regeneração
+- Escalabilidade
+- Atualizações com pouco downtime
+- Rollbacks
+
+#### Estratégias de atualização
+
+| Estratégia | Descrição |
+|---|---|
+| **RollingUpdate** (padrão) | Os pods são substituídos aos poucos, sem derrubar a aplicação |
+| **Recreate** | Todos os pods são encerrados antes de os novos serem criados. Há um período de downtime |
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webapp
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      containers:
+        - name: webapp-container
+          image: nginx:1.25
+          ports:
+            - containerPort: 80
+```
