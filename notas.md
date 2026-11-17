@@ -15,7 +15,10 @@
 11. [API Gateway](#11-api-gateway)
 12. [Tolerância a falhas e Circuit Breaker](#12-tolerância-a-falhas-e-circuit-breaker)
 13. [Filas de mensagem (Message Queues)](#13-filas-de-mensagem-message-queues)
-14. [Kubernetes](#14-kubernetes)
+14. [Empacotamento em JAR](#14-empacotamento-em-jar)
+15. [Spring Boot Profiles e containerização](#15-spring-boot-profiles-e-containerização)
+16. [Containerizando os microsserviços do projeto](#16-containerizando-os-microsserviços-do-projeto)
+17. [Kubernetes](#17-kubernetes)
 
 ---
 
@@ -1530,7 +1533,496 @@ Acesse http://localhost:15672, vá em **Queues and Streams** e verifique que exi
 
 ---
 
-## 14. Kubernetes
+## 14. Empacotamento em JAR
+
+### Por que empacotar
+
+Quando se executa uma aplicação Spring sem empacotamento (pela IDE, por exemplo), acontecem os seguintes passos:
+
+1. Compilação do código
+2. Execução da classe principal (`main`)
+3. Execução do código das dependências
+4. Execução do servidor de aplicação embutido
+5. Recarregamento a cada mudança no código-fonte
+
+**Empacotar** é compilar o código em bytecode, juntá-lo com as dependências e gerar um executável distribuível, que pode ser usado em outros ambientes:
+
+> **pacote = bytecode + bibliotecas + configuração**
+
+Esse pacote é o **JAR** (*Java ARchive*).
+
+### Vantagens do JAR
+
+- Deploy simplificado
+- Inclui tudo o que é necessário para a aplicação rodar
+- Qualquer JRE é capaz de executá-lo
+
+Outras formas de empacotamento: **WAR**, **EAR** e **imagens Docker**.
+
+### Maven e Gradle
+
+As ferramentas mais comuns para gerar JARs são:
+
+| Ferramenta | Arquivo de configuração |
+|---|---|
+| **Maven** | `pom.xml` (*Project Object Model*): configurações e dependências do projeto |
+| **Gradle** | `build.gradle` |
+
+O Maven pode ser instalado no computador para uso geral ou usado por projeto, através do **wrapper** (`mvnw`). Dentro do projeto existe a pasta `.mvn/wrapper`, que contém o necessário para usar o Maven só naquele projeto, sem instalação.
+
+Para gerar outro formato de pacote, use a tag `<packaging>` no `pom.xml`. Se ela não for especificada, o padrão é `jar`:
+
+```xml
+<packaging>ear</packaging>
+```
+
+### Comandos básicos
+
+| Comando | Descrição |
+|---|---|
+| `mvn clean` | Apaga os arquivos gerados no último build |
+| `mvn package` | Compila o código-fonte e gera o JAR (ou outro formato) |
+| `mvn clean package` | Os dois comandos acima juntos |
+
+Com o wrapper, troque `mvn` por `mvnw` e rode o comando no mesmo diretório onde fica a pasta `.mvn`.
+
+> **Obs.:** por padrão, o Maven executa os testes, se houver. Para pular os testes, adicione `-DskipTests`:
+
+```bash
+.\mvnw clean package -DskipTests
+```
+
+### Inspecionando e executando o JAR
+
+Listar o conteúdo de um JAR:
+
+```bash
+jar -tf .\target\company_service-0.0.1-SNAPSHOT.jar
+```
+
+- `-t` (ou `--list`): lista o conteúdo
+- `-f`: indica o arquivo JAR a ser lido
+
+Executar o JAR:
+
+```bash
+java -jar <caminho do jar>
+
+# Exemplo
+java -jar .\target\company_service-0.0.1-SNAPSHOT.jar
+```
+
+### Containerizando a aplicação
+
+Um dos primeiros problemas quando se tenta rodar a aplicação em um container, é que, durante o desenvolvimento local, não seria mais possível usar localhost,
+uma vez que cada serviço roda em um container, não mais na máquina local. Seria preciso trocar de localhost para o nome de cada serviço. Para isso, pode-se
+usar spring boot profiles. Dependendo do ambiente em que for rodar, cada perfil pode ter valores diferentes. Por exemplo: diferentes valores de configuração
+para desenvolvimento, testes e produção.
+
+---
+
+## 15. Spring Boot Profiles e containerização
+
+Nos `application.properties`, os serviços apontam para `localhost` (Postgres, RabbitMQ, Eureka, OTel, Config Server). Isso funciona rodando pela IDE, mas **dentro de um container, `localhost` é o próprio container**, então o serviço não encontra as dependências.
+
+**Profiles** resolvem isso: cada ambiente tem sua configuração, e o ambiente é escolhido na hora de subir a aplicação, usando **a mesma imagem Docker**.
+
+### Como funcionam
+
+| Arquivo | Quando é carregado |
+|---|---|
+| `application.properties` | Sempre (configuração comum) |
+| `application-{profile}.properties` | Só quando aquele profile está ativo |
+
+Se a mesma chave existir nos dois, **vale o valor do profile**. Por isso o arquivo do profile só precisa ter o que muda.
+
+Formas de ativar um profile:
+
+```bash
+# variável de ambiente (forma usada com Docker)
+SPRING_PROFILES_ACTIVE=docker
+
+# argumento de linha de comando
+java -jar app.jar --spring.profiles.active=docker
+
+# propriedade de sistema da JVM
+java -Dspring.profiles.active=docker -jar app.jar
+```
+
+É possível ativar mais de um (`docker,debug`). Em caso de conflito, o último da lista vence.
+
+### Separando por ambiente
+
+Uma divisão comum:
+
+- **default** (sem profile): desenvolvimento local, usa `localhost`.
+- **docker**: docker-compose, usa os nomes dos serviços como host.
+- **prod**: segredos e URLs vêm de variáveis de ambiente.
+
+#### `application.properties` (base + local)
+
+```properties
+spring.application.name=company-service
+server.port=8081
+
+spring.datasource.url=jdbc:postgresql://localhost:5432/companydb
+spring.datasource.username=admin
+spring.datasource.password=admin
+spring.jpa.hibernate.ddl-auto=update
+
+eureka.client.serviceUrl.defaultZone=http://localhost:8084/eureka/
+
+management.opentelemetry.tracing.export.otlp.endpoint=http://localhost:4318/v1/traces
+management.otlp.metrics.export.url=http://localhost:4318/v1/metrics
+
+spring.rabbitmq.host=localhost
+spring.rabbitmq.port=5672
+spring.rabbitmq.username=guest
+spring.rabbitmq.password=guest
+```
+
+#### `application-docker.properties`
+
+Só o que muda. Na rede do docker-compose, **cada serviço é acessado pelo nome definido no `docker-compose.yaml`**:
+
+```properties
+spring.datasource.url=jdbc:postgresql://postgres:5432/companydb
+
+eureka.client.serviceUrl.defaultZone=http://service-registry:8084/eureka/
+eureka.instance.prefer-ip-address=true
+
+management.opentelemetry.tracing.export.otlp.endpoint=http://otel-collector:4318/v1/traces
+management.otlp.metrics.export.url=http://otel-collector:4318/v1/metrics
+
+spring.rabbitmq.host=rabbitmq
+```
+
+> `eureka.instance.prefer-ip-address=true` faz o serviço se registrar no Eureka com o IP do container, acessível pelos outros containers, em vez do hostname interno, que pode não ser resolvível.
+
+#### `application-prod.properties`
+
+Senhas não ficam no código. Usa-se placeholders `${VARIAVEL:valor_padrao}`:
+
+```properties
+spring.datasource.url=jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME:companydb}
+spring.datasource.username=${DB_USER}
+spring.datasource.password=${DB_PASSWORD}
+spring.jpa.hibernate.ddl-auto=validate
+
+spring.rabbitmq.host=${RABBITMQ_HOST}
+spring.rabbitmq.username=${RABBITMQ_USER}
+spring.rabbitmq.password=${RABBITMQ_PASSWORD}
+```
+
+O `ddl-auto=validate` mostra que profiles também mudam **comportamento**, não só endereços: em produção, o Hibernate não deve alterar o schema.
+
+### A imagem não conhece o ambiente
+
+A imagem é **a mesma para todos os ambientes**. O profile é definido ao subir o container, nunca no build.
+
+```dockerfile
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY target/company_service-0.0.1-SNAPSHOT.jar app.jar
+EXPOSE 8081
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
+
+(A versão do Java deve ser a mesma do `pom.xml`.)
+
+```bash
+.\mvnw clean package -DskipTests
+docker build -t company-service .
+```
+
+Alternativa com **build multi-stage**, em que o Docker compila o projeto e não é preciso rodar o Maven antes:
+
+```dockerfile
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /build
+COPY . .
+RUN ./mvnw clean package -DskipTests
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /build/target/*.jar app.jar
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
+
+O Spring Boot também gera imagens sem Dockerfile, via Buildpacks: `.\mvnw spring-boot:build-image`.
+
+### Ativando o profile no docker-compose
+
+```yaml
+  company-service:
+    build: ./company_service      # ou image: company-service
+    container_name: company-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    networks:
+      - postgres
+```
+
+`SPRING_PROFILES_ACTIVE: docker` carrega `application.properties` e, por cima, `application-docker.properties`.
+
+Observações:
+
+- O `service-registry` (Eureka) também precisa estar no compose, com esse nome, para `http://service-registry:8084/eureka/` funcionar.
+- Uma porta publicada como `127.0.0.1:5432:5432` só limita o acesso **a partir da máquina host**. Containers na mesma rede acessam `postgres:5432` normalmente.
+
+Em produção, o mesmo serviço recebe outro profile e as variáveis:
+
+```yaml
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_HOST: meu-banco.exemplo.com
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}   # vem de um arquivo .env, fora do git
+```
+
+### Variáveis de ambiente sobrescrevem propriedades
+
+O Spring converte variáveis de ambiente em propriedades (*relaxed binding*): `.` vira `_`, `-` é removido e tudo fica em maiúsculas.
+
+| Propriedade | Variável de ambiente |
+|---|---|
+| `spring.datasource.url` | `SPRING_DATASOURCE_URL` |
+| `spring.rabbitmq.host` | `SPRING_RABBITMQ_HOST` |
+| `eureka.client.serviceUrl.defaultZone` | `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE` |
+
+Variáveis de ambiente têm **prioridade maior** que os arquivos `.properties`, inclusive os de profile. A combinação mais organizada:
+
+- **Profile** para o que é estrutural e muda junto (hosts, `ddl-auto`, nível de log).
+- **Variáveis de ambiente** para segredos e ajustes pontuais.
+
+Ordem de prioridade simplificada (da maior para a menor):
+
+1. Argumentos de linha de comando (`--chave=valor`)
+2. Variáveis de ambiente
+3. `application-{profile}.properties`
+4. `application.properties`
+
+### Profiles com o Config Server
+
+1. O Config Server procura arquivos `{application}-{profile}.properties`. Com o profile `docker`, o `job-service` recebe `job-service.properties` + `job-service-docker.properties`: a configuração fica centralizada **por ambiente**.
+2. O endereço do próprio Config Server muda no Docker. No `application-docker.properties` do serviço:
+
+```properties
+spring.config.import=optional:configserver:http://config-server:8888
+```
+
+### Outros recursos
+
+**Vários profiles em um arquivo só**: `#---` separa documentos e `spring.config.activate.on-profile` indica o profile de cada parte:
+
+```properties
+spring.rabbitmq.host=localhost
+#---
+spring.config.activate.on-profile=docker
+spring.rabbitmq.host=rabbitmq
+```
+
+**Grupos de profiles**: um nome ativa vários:
+
+```properties
+spring.profiles.group.prod=postgres-prod,rabbit-prod
+```
+
+**Beans por profile**: `@Profile` cria o bean só em determinados ambientes:
+
+```java
+@Bean
+@Profile("!prod")   // todos, menos produção
+public CommandLineRunner dadosDeTeste(CompanyRepository repo) { ... }
+```
+
+### Verificando o profile ativo
+
+- No log de inicialização: `The following 1 profile is active: "docker"`.
+- O endpoint `/actuator/env` mostra os profiles ativos e de onde veio cada valor. Precisa ser exposto (`management.endpoints.web.exposure.include=env`), e só em dev, porque expõe configurações.
+
+### Resumo
+
+1. `application.properties`: base, para rodar pela IDE.
+2. `application-docker.properties`: troca `localhost` pelos nomes dos serviços no compose.
+3. `application-prod.properties`: segredos via variáveis de ambiente.
+4. Uma única imagem Docker, sem profile fixo.
+5. Cada ambiente define `SPRING_PROFILES_ACTIVE` (e variáveis) ao subir o container.
+
+---
+
+## 16. Containerizando os microsserviços do projeto
+
+Aplicação prática da seção anterior: todos os serviços Spring do projeto (`service-registry`, `config-server`, `company_service`, `job_service`, `review_service` e `api-gateway`) passaram a rodar no docker-compose, junto com Postgres, RabbitMQ, OTel Collector e Zipkin.
+
+Foram três peças em cada serviço:
+
+| Arquivo | Função |
+|---|---|
+| `Dockerfile` | Como construir a imagem |
+| `.dockerignore` | O que não vai para a imagem (`target/`, arquivos da IDE, `HELP.md`) |
+| `src/main/resources/application-docker.properties` | O que muda na configuração quando roda no Docker |
+
+E o `docker-compose.yaml` ganhou os serviços.
+
+### Dockerfile
+
+O mesmo para todos os serviços; só muda a porta do `EXPOSE`:
+
+```dockerfile
+# Etapa 1: compila o projeto e gera o JAR
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /build
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+COPY src/ src/
+RUN --mount=type=cache,target=/root/.m2 ./mvnw -B clean package -DskipTests
+
+# Etapa 2: imagem final, só com a JRE e o JAR
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /build/target/*.jar app.jar
+EXPOSE 8081
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
+
+**Por que assim:**
+
+- **Multi-stage:** o próprio Docker compila o projeto, então não é preciso rodar o Maven antes do `docker compose up`. A imagem final fica só com a JRE e o JAR, sem JDK, código-fonte ou Maven, por isso é menor.
+- **`--mount=type=cache,target=/root/.m2`:** guarda as dependências baixadas entre builds. Só o primeiro build baixa tudo.
+- **`-B`** (*batch mode*): saída do Maven sem cores e sem interação, adequada para builds automatizados.
+- **`-DskipTests`:** os testes são executados no desenvolvimento, não a cada build da imagem.
+- **Nenhum profile no Dockerfile:** a imagem é a mesma para qualquer ambiente; o profile é escolhido no compose.
+
+### application-docker.properties
+
+Cada arquivo só sobrescreve o que muda dentro do Docker. A regra geral é **trocar `localhost` pelo nome do serviço no compose**:
+
+| Serviço | O que muda |
+|---|---|
+| `service-registry` | `eureka.instance.hostname=service-registry` |
+| `config-server` | URL do Eureka e `prefer-ip-address` |
+| `company_service`, `review_service` | Postgres, Eureka, OTel e RabbitMQ |
+| `job_service` | Postgres, Eureka, OTel e endereço do Config Server |
+| `api-gateway` | Eureka, OTel e todas as rotas |
+
+Exemplo (`company_service`):
+
+```properties
+#postgresql
+spring.datasource.url=jdbc:postgresql://postgres:5432/companydb
+
+#eureka
+eureka.client.serviceUrl.defaultZone=http://service-registry:8084/eureka/
+eureka.instance.prefer-ip-address=true
+
+#telemetry
+management.opentelemetry.tracing.export.otlp.endpoint=http://otel-collector:4318/v1/traces
+management.otlp.metrics.export.url=http://otel-collector:4318/v1/metrics
+
+#RabbitMQ
+spring.rabbitmq.host=rabbitmq
+```
+
+**Pontos importantes:**
+
+- **`eureka.instance.prefer-ip-address=true`:** o `job_service` chama o `company-service` e o `company_service` chama o `review-service` via Feign, descobrindo o endereço pelo Eureka. Sem essa opção, o serviço se registra com o hostname interno do container (um ID aleatório), que os outros containers não conseguem resolver. Com ela, o registro é feito com o IP do container na rede do compose.
+- **Rotas do api-gateway repetidas por inteiro:** propriedades em lista (`routes[0]`, `routes[1]`...) **não são mescladas** entre arquivos. Se o profile redefine a lista, ela substitui a lista inteira do `application.properties`. Por isso as 6 rotas estão repetidas no `application-docker.properties`, só com o host trocado (`http://company-service:8081`, por exemplo).
+- **Config Server no `job_service`:** `spring.config.import=optional:configserver:http://config-server:8888`. Valores que vêm do Config Server têm **prioridade sobre os arquivos locais**. Se o `job-service.properties` do repositório de configuração tiver URLs com `localhost`, elas sobrescrevem as do profile, e é preciso criar um `job-service-docker.properties` no repositório.
+
+### Serviços no docker-compose
+
+Todos seguem o mesmo formato:
+
+```yaml
+  company-service:
+    build: ./company_service
+    container_name: company-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8081:8081"
+    networks:
+      - postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+```
+
+- **`build`:** constrói a imagem a partir do Dockerfile da pasta do serviço.
+- **`SPRING_PROFILES_ACTIVE: docker`:** carrega `application.properties` e, por cima, `application-docker.properties`.
+- **Nome do serviço:** é o hostname na rede do compose, por isso precisa ser exatamente o usado nos `application-docker.properties` (`company-service`, `job-service`, `review-service`, `service-registry`, `config-server`).
+- **`networks: postgres`:** a mesma rede do banco, do RabbitMQ e do OTel Collector, para que todos se enxerguem pelo nome.
+- **`ports`:** as mesmas portas de antes (8081 a 8085 e 8888), então as URLs no navegador e no Postman continuam iguais.
+
+### Ordem de inicialização
+
+```
+postgres, rabbitmq ─┐
+service-registry ───┼─> company-service, review-service ─┐
+   └─> config-server ─> job-service ──────────────────────┼─> api-gateway
+```
+
+Um `depends_on` simples só espera o container **iniciar**, não a aplicação ficar **pronta**. Uma aplicação Spring leva alguns segundos para subir, então foram usados **healthchecks** com `condition: service_healthy`:
+
+```yaml
+  service-registry:
+    ...
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8084'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+```
+
+```yaml
+  rabbitmq:
+    ...
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+```
+
+**Por que assim:**
+
+- **Teste com `/dev/tcp`:** verifica se a porta já aceita conexões. É usado no lugar de `curl` no actuator porque a imagem `eclipse-temurin` não garante ter `curl`, e o `service-registry` e o `config-server` nem têm actuator. O `bash` existe na imagem (base Ubuntu).
+- **`start_period: 20s`:** tempo de tolerância para a JVM subir; falhas nesse período não contam como tentativas.
+- **`job-service` espera o `config-server`:** o import é `optional:`. Se o Config Server ainda não estivesse respondendo, o serviço subiria **sem a configuração centralizada e sem erro**, uma falha silenciosa.
+- **Serviços esperam o `service-registry`:** evita erros de conexão com o Eureka nos primeiros segundos. O cliente Eureka tenta de novo sozinho, mas assim o log fica limpo e o registro acontece logo.
+- **Healthcheck no `rabbitmq`:** o broker leva alguns segundos para aceitar conexões. Sem esperar, o `company_service` e o `review_service` falhariam ao conectar na inicialização.
+- **`api-gateway` por último:** só faz sentido receber requisições quando os serviços de destino já existem.
+
+### Executando
+
+```bash
+# constrói as imagens e sobe tudo
+docker compose up -d --build
+
+# acompanha o log de um serviço
+docker compose logs -f job-service
+```
+
+No log deve aparecer `The following 1 profile is active: "docker"`. O primeiro build é demorado porque cada serviço baixa as dependências do Maven; os seguintes usam o cache.
+
+Para rodar algum serviço pela IDE (sem profile), pare o container dele: o `application.properties` continua apontando para `localhost`, e as dependências do compose (Postgres, RabbitMQ, Eureka etc.) continuam publicadas nas mesmas portas. Só que os serviços que estão em containers podem não conseguir chamar o serviço da IDE pelo endereço que ele registrou no Eureka. Para testar a comunicação entre serviços, é mais simples rodar todos no compose ou todos pela IDE.
+
+---
+
+## 17. Kubernetes
 
 **Kubernetes** (ou **K8s**) é uma plataforma de **orquestração de containers**. Ele gerencia o ciclo de vida de aplicações que rodam em containers, com escalabilidade, previsibilidade e alta disponibilidade. Também permite definir como as aplicações interagem com o ambiente fora dos containers.
 
