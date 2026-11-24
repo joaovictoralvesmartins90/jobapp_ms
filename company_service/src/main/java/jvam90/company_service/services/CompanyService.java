@@ -1,7 +1,11 @@
 package jvam90.company_service.services;
 
 import jvam90.company_service.clients.ReviewClient;
+import jvam90.company_service.dtos.CompanyRequest;
+import jvam90.company_service.dtos.CompanyResponse;
 import jvam90.company_service.exceptions.CompanyAlreadyExistsException;
+import jvam90.company_service.exceptions.CompanyNotFoundException;
+import jvam90.company_service.mappers.CompanyMapper;
 import jvam90.company_service.messaging.dto.ReviewMessage;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.repositories.CompanyRepository;
@@ -27,22 +31,23 @@ public class CompanyService implements ICompanyService{
     }
 
     @Override
-    public List<Company> findAll() {
-        return companyRepository.findAll();
+    public List<CompanyResponse> findAll() {
+        return companyRepository.findAll().stream().map(CompanyMapper::mapFromEntity).toList();
     }
 
     @Override
-    public Optional<Company> findCompanyById(Long id) {
-        return companyRepository.findById(id);
+    public CompanyResponse findCompanyById(Long id) {
+        return companyRepository.findById(id).map(CompanyMapper::mapFromEntity).orElseThrow(() -> new CompanyNotFoundException(id.toString()));
     }
 
     @Override
-    public Company addCompany(Company company) throws CompanyAlreadyExistsException {
-        if(!companyExists(company.getName())){
+    public CompanyResponse addCompany(CompanyRequest companyRequest) throws CompanyAlreadyExistsException {
+        if(!companyExists(companyRequest.name())){
+            Company company = CompanyMapper.mapFromRequest(companyRequest);
             companyRepository.save(company);
-            return company;
+            return CompanyMapper.mapFromEntity(company);
         }else{
-            throw new CompanyAlreadyExistsException(company.getName());
+            throw new CompanyAlreadyExistsException(companyRequest.name());
         }
     }
 

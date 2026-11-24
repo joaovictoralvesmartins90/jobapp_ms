@@ -1,5 +1,8 @@
 package jvam90.company_service.controllers;
 
+import jakarta.validation.Valid;
+import jvam90.company_service.dtos.CompanyRequest;
+import jvam90.company_service.dtos.CompanyResponse;
 import jvam90.company_service.exceptions.CompanyAlreadyExistsException;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.services.ICompanyService;
@@ -21,35 +24,28 @@ public class CompanyController {
     }
 
     @GetMapping()
-    public ResponseEntity<List<Company>> findAll(){
+    public ResponseEntity<List<CompanyResponse>> findAll(){
         return ResponseEntity.ok(companyService.findAll());
     }
 
     @GetMapping("/{companyId}")
-    public ResponseEntity<Company> findCompanyById(@PathVariable Long companyId){
-        return this.companyService.findCompanyById(companyId)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<CompanyResponse> findCompanyById(@PathVariable Long companyId){
+        return ResponseEntity.ok(this.companyService.findCompanyById(companyId));
     }
 
     @PostMapping()
-    public ResponseEntity<Company> addCompany(@RequestBody Company company){
-        Company companyCreated = null;
-        try {
-            companyCreated = this.companyService.addCompany(company);
-        } catch (CompanyAlreadyExistsException e) {
-            throw new RuntimeException(e);
-        }
+    public ResponseEntity<CompanyResponse> addCompany(@RequestBody @Valid CompanyRequest company){
+        CompanyResponse companyResponse = this.companyService.addCompany(company);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{companyId}")
-                .buildAndExpand(company.getId())
+                .buildAndExpand(companyResponse.id())
                 .toUri();
-        return ResponseEntity.created(location).body(companyCreated);
+        return ResponseEntity.created(location).body(companyResponse);
     }
 
     @DeleteMapping("/{companyId}")
-    public ResponseEntity<String> deleteCompany(@PathVariable Long companyId){
+    public ResponseEntity deleteCompany(@PathVariable Long companyId){
         if(this.companyService.deleteCompany(companyId)){
             return ResponseEntity.noContent().build();
         }
@@ -57,7 +53,7 @@ public class CompanyController {
     }
 
     @PutMapping("/{companyId}")
-    public ResponseEntity<String> updateCompany(@RequestBody Company company, @PathVariable Long companyId){
+    public ResponseEntity updateCompany(@RequestBody Company company, @PathVariable Long companyId){
         if(this.companyService.updateCompany(company, companyId)){
             return ResponseEntity.noContent().build();
         }

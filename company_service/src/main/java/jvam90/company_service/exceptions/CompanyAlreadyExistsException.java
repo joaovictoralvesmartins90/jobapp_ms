@@ -1,7 +1,7 @@
 package jvam90.company_service.exceptions;
 
-public class CompanyAlreadyExistsException extends Exception {
+public class CompanyAlreadyExistsException extends RuntimeException {
     public CompanyAlreadyExistsException(String message){
-        super(message);
+        super("There is already a company with the name '%s'.".formatted(message));
     }
 }

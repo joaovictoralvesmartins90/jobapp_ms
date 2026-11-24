@@ -1,174 +1,214 @@
-# Revisão técnica: jobapp_ms
+# Guia de melhorias: jobapp_ms
 
-Revisão dos serviços do projeto segundo boas práticas de APIs REST, uso de DTOs, código limpo e o ecossistema Spring (Boot 4.1 / Cloud 2025.1).
+Este documento é uma revisão do projeto, pensada para quem está começando com microsserviços e Spring. A ideia não é apontar erros, e sim explicar **o que já está bem feito**, **o que pode melhorar** e, principalmente, **por quê**. Entender o motivo é o que faz a boa prática virar hábito.
 
-Cada item a melhorar segue o formato **Problema → Por que está errado → Solução**. Os itens estão ordenados por gravidade dentro de cada serviço:
+Stack considerada: Java 21, Spring Boot 4.1, Spring Cloud 2025.1.
 
-- 🔴 **Bug**: comportamento incorreto hoje.
-- 🟠 **Importante**: viola princípios REST ou de design e vai causar problemas.
-- 🟡 **Melhoria**: limpeza, legibilidade, convenções.
+## Como ler este guia
+
+Cada item segue sempre o mesmo roteiro:
+
+- **O que acontece hoje**: o comportamento atual do código.
+- **Por que isso é um problema**: a explicação, em linguagem simples.
+- **Como corrigir**: um caminho sugerido, geralmente com um trecho de código.
+
+Os itens têm uma cor que indica a prioridade:
+
+- 🔴 **Bug**: o sistema se comporta de forma errada hoje. Corrija primeiro.
+- 🟠 **Importante**: funciona, mas vai trazer dor de cabeça (contrato da API ruim, acoplamento, falhas em produção).
+- 🟡 **Melhoria**: deixa o código mais limpo, legível e dentro das convenções.
+- ✅ **Resolvido**: já foi corrigido. Fica registrado para mostrar a evolução.
+
+> 💡 Não se assuste com o tamanho da lista. Projeto de estudo é para isso mesmo. A seção [11. Ordem sugerida](#11-ordem-sugerida) mostra por onde começar, e o [Glossário](#glossário) no final explica os termos técnicos.
 
 ## Sumário
 
-1. [Visão geral: o que está bom](#1-visão-geral-o-que-está-bom)
-2. [company_service](#2-company_service)
-3. [job_service](#3-job_service)
-4. [review_service](#4-review_service)
-5. [api-gateway](#5-api-gateway)
-6. [config-server](#6-config-server)
-7. [service-registry](#7-service-registry)
-8. [Pontos transversais (todos os serviços)](#8-pontos-transversais-todos-os-serviços)
-9. [Ordem sugerida de execução](#9-ordem-sugerida-de-execução)
+1. [O que já está bom](#1-o-que-já-está-bom)
+2. [O que já foi corrigido](#2-o-que-já-foi-corrigido)
+3. [company_service](#3-company_service)
+4. [job_service](#4-job_service)
+5. [review_service](#5-review_service)
+6. [api-gateway](#6-api-gateway)
+7. [config-server](#7-config-server)
+8. [service-registry](#8-service-registry)
+9. [Docker e Kubernetes](#9-docker-e-kubernetes)
+10. [Pontos que valem para todos os serviços](#10-pontos-que-valem-para-todos-os-serviços)
+11. [Ordem sugerida](#11-ordem-sugerida)
+12. [Glossário](#glossário)
 
 ---
 
-## 1. Visão geral: o que está bom
+## 1. O que já está bom
 
-| Ponto | Onde |
+Antes de falar do que melhorar, vale reconhecer: a base do projeto é sólida e segue várias práticas que muita aplicação em produção não segue.
+
+| O que está bom | Por que isso importa | Onde |
+|---|---|---|
+| URLs com **substantivos no plural** (`/companies`, `/jobs`, `/reviews`), sem verbos como `/getCompany` | É a convenção REST. Quem usa a API adivinha os caminhos sem ler documentação | Todos os controllers |
+| **Recursos aninhados**: `/companies/{companyId}/jobs` | A URL mostra que a vaga *pertence* a uma empresa | job, review |
+| **Verbos HTTP corretos**: GET lê, POST cria, PUT atualiza, DELETE remove | Cada verbo tem um significado combinado entre cliente e servidor | Todos |
+| `POST` devolve **201 Created** com o header **`Location`** | O cliente recebe o endereço do recurso recém-criado | Todos |
+| **404** quando o recurso não existe | O cliente sabe distinguir "não existe" de "deu erro" | Todos |
+| **Injeção de dependência pelo construtor**, com campos `final` | Deixa claro do que a classe precisa, impede reatribuição e facilita testes | Quase todos (exceção em `JobService`) |
+| Camadas separadas: **controller → service → repository** | Cada classe tem uma responsabilidade só | Todos |
+| Services devolvendo `Optional` em vez de `null` | Obriga quem chama a tratar o caso "não encontrado" | company, review |
+| **Um banco por serviço** (`companydb`, `jobdb`, `reviewdb`) | Regra de ouro dos microsserviços: cada serviço é dono dos seus dados | Infra |
+| **Service discovery** com Eureka + **OpenFeign** | Os serviços se encontram pelo nome, sem IP fixo no código | Todos |
+| **Circuit breaker** (Resilience4j) com fallback e health indicator | Se o company-service cair, o job-service não cai junto | job |
+| **Mensageria assíncrona** com RabbitMQ e conversor JSON | O review não precisa esperar o company responder para salvar uma avaliação | review → company |
+| Mensagem do Rabbit com DTO próprio (`ReviewMessage`), e não a entidade | A mensagem é um contrato. Mudar a tabela não quebra o outro serviço | review, company |
+| **Observabilidade**: OpenTelemetry, traceId/spanId no log, Zipkin, Actuator | Dá para seguir uma requisição passando por vários serviços | Todos |
+| **Dockerfile multi-stage** com cache do Maven e imagem final só com a JRE | Imagem menor, build mais rápido e sem ferramentas de compilação em produção | Todos os módulos |
+| `docker-compose` com healthcheck, `depends_on` com condição e portas do banco presas em `127.0.0.1` | Sobe tudo na ordem certa e não expõe o banco para a rede | Infra |
+| Perfil `docker` separado (`application-docker.properties`) | A mesma imagem roda local ou em container só trocando o perfil | Todos |
+| Manifests de **Kubernetes** com `startupProbe`, `livenessProbe`, `readinessProbe`, `resources` e `MaxRAMPercentage` | São exatamente os cuidados que uma aplicação Java precisa para rodar bem num cluster | k8s |
+| `Config Server` lendo de um repositório Git | A configuração fica versionada e fora do código | config-server |
+
+---
+
+## 2. O que já foi corrigido
+
+Itens apontados na revisão anterior que já foram resolvidos. Bom trabalho! 🎉
+
+| ✅ Item | O que foi feito |
 |---|---|
-| URIs com **substantivos no plural** (`/companies`, `/jobs`, `/reviews`) e sem verbos nos CRUDs | Todos os controllers |
-| **Recursos aninhados** que mostram a relação de posse: `/companies/{companyId}/jobs` e `/companies/{companyId}/reviews` | job, review |
-| **Verbos HTTP corretos**: GET lê, POST cria, PUT atualiza, DELETE remove | Todos |
-| `POST` devolve **201 Created** com header **`Location`** montado por `ServletUriComponentsBuilder` | Todos |
-| **404** quando o recurso não existe | Todos |
-| **Injeção por construtor** com campos `final` na maior parte do código | Todos (exceção em `JobService`) |
-| Camadas bem separadas: controller → service → repository | Todos |
-| Services retornando `Optional` em vez de `null` | company, review |
-| **Banco por serviço** (`companydb`, `jobdb`, `reviewdb`), sem tabelas compartilhadas entre serviços | Infra |
-| **Service discovery** com Eureka + **OpenFeign** para chamadas síncronas | Todos |
-| **Circuit breaker** (Resilience4j) com fallback e health indicator | job |
-| **Mensageria assíncrona** (RabbitMQ) para atualizar a média, com conversor JSON | review → company |
-| Mensagem do Rabbit com DTO próprio (`ReviewMessage`) em vez da entidade | review, company |
-| Uso de DTOs no `job_service` (`JobDto`, `CompanyDto`, `CreateJobDto`) | job |
-| **Observabilidade**: OpenTelemetry, trace/span no log, Zipkin, Actuator | Todos |
-| **Dockerfile multi-stage** com cache do Maven e imagem final só com a JRE | company |
-| `docker-compose` com healthcheck, portas presas a `127.0.0.1` e script de criação dos bancos | Infra |
-| Perfil `docker` separado (`application-docker.properties`) | company |
-| `Config Server` apontando para um repositório Git | config-server |
+| `company_service` não subia por falta de `@EnableFeignClients` | Anotação adicionada em `CompanyServiceApplication` |
+| `updateCompany` ignorava a descrição | Agora copia `name`, `employees` e `description` |
+| Empresa duplicada devolvia 201 sem criar nada | Agora lança `CompanyAlreadyExistsException` (mas ainda falta devolver 409, ver 3.1) |
+| DELETE e PUT de empresa devolviam texto solto | Agora devolvem **204 No Content** |
+| Imports sem uso em `Company` | Removidos |
+| DTOs de empresa | `CompanyRequest` e `CompanyResponse` criados como `record` (ainda não estão em uso, ver 3.3) |
+| `service-registry` com hostname fixo | O perfil `docker` sobrescreve para `service-registry` |
+| Só o company tinha Dockerfile | Todos os 6 módulos têm `Dockerfile` e `.dockerignore`, e o compose sobe a aplicação inteira |
 
 ---
 
-## 2. company_service
+## 3. company_service
 
-### 🔴 2.1 Falta `@EnableFeignClients`
+### 🔴 3.1 Empresa duplicada vira erro 500
 
-**Problema:** `CompanyServiceApplication` não tem `@EnableFeignClients`, mas `CompanyService` depende de `ReviewClient` (uma interface `@FeignClient`).
-
-**Por que está errado:** sem a anotação, o Spring não cria a implementação da interface. Sem o bean, a injeção em `CompanyService` falha e o contexto não sobe (`No qualifying bean of type ReviewClient`). O `job_service` tem a anotação; o `company_service` não.
-
-**Solução:**
+**O que acontece hoje:** o service lança `CompanyAlreadyExistsException`, mas o controller captura e embrulha numa `RuntimeException`:
 
 ```java
-@EnableFeignClients
-@SpringBootApplication
-public class CompanyServiceApplication { ... }
-```
-
-### 🔴 2.2 `updateCompany` não atualiza a descrição
-
-**Problema:** em `CompanyService.updateCompany`, só `name` e `employees` são copiados. `description` é ignorada.
-
-**Por que está errado:** `PUT` substitui o recurso inteiro. O cliente envia uma descrição nova, recebe "updated successfully" e o valor não muda.
-
-**Solução:** copiar todos os campos editáveis. Com DTO (ver 2.4), isso fica explícito:
-
-```java
-company.setName(request.name());
-company.setEmployees(request.employees());
-company.setDescription(request.description());
-```
-
-### 🔴 2.3 Empresa duplicada devolve 201 sem criar nada
-
-**Problema:** em `addCompany`, se o nome já existe, o service não salva e devolve o objeto recebido. O controller responde **201 Created** com `Location: /companies/null`.
-
-**Por que está errado:** 201 diz ao cliente que um recurso foi criado, e isso não aconteceu. O `Location` aponta para uma URI inválida. Conflito de unicidade deve ser **409 Conflict**.
-
-**Solução:** lançar uma exceção de domínio e traduzi-la num `@RestControllerAdvice` (ver 8.2):
-
-```java
-public CompanyResponse create(CompanyRequest request) {
-    if (repository.existsByNameIgnoreCase(request.name())) {
-        throw new CompanyAlreadyExistsException(request.name()); // → 409
-    }
-    return mapper.toResponse(repository.save(mapper.toEntity(request)));
+} catch (CompanyAlreadyExistsException e) {
+    throw new RuntimeException(e);   // vira 500 Internal Server Error
 }
 ```
 
-Também vale uma restrição `unique` no banco (`@Column(unique = true)`): a verificação no código sozinha não impede duas requisições simultâneas de criarem o mesmo nome.
+**Por que isso é um problema:** 500 significa "o servidor quebrou". Mas aqui nada quebrou: o cliente pediu algo que conflita com um dado existente. O status certo é **409 Conflict**. Com 500, quem usa a API acha que é um bug do servidor e não sabe que precisa trocar o nome.
 
-### 🟠 2.4 A entidade JPA é exposta direto na API
+**Como corrigir:**
 
-**Problema:** o controller recebe e devolve `Company` (entidade `@Entity`).
+1. Faça a exceção herdar de `RuntimeException`. Exceções *checked* (`extends Exception`) obrigam a usar `throws` e `try/catch` em todo o caminho, e no Spring a convenção é usar exceções *unchecked* para erros de negócio.
+2. Remova o `try/catch` do controller.
+3. Traduza a exceção para 409 num `@RestControllerAdvice` (ver [10.2](#-102-tratamento-de-erros-num-lugar-só-com-problemdetail)).
 
-**Por que está errado:**
-- O cliente pode enviar `id` e `averageRating` no POST/PUT. `averageRating` deveria ser calculado só pelo sistema, a partir das reviews.
-- Qualquer mudança na tabela (coluna nova, relacionamento) muda o contrato da API sem querer.
-- Relacionamentos `LAZY` futuros causam `LazyInitializationException` ou serialização em loop.
-- Não há onde colocar validação de entrada sem misturar regras HTTP na entidade.
+```java
+public class CompanyAlreadyExistsException extends RuntimeException {
+    public CompanyAlreadyExistsException(String name) {
+        super("Já existe uma empresa com o nome '%s'".formatted(name));
+    }
+}
+```
 
-**Solução:** DTOs separados para entrada e saída. Com Java 21, `record` é o ideal:
+Também vale colocar `@Column(unique = true)` no `name`. A verificação no código sozinha não impede que duas requisições simultâneas criem o mesmo nome: as duas checam "não existe", e as duas salvam. A restrição no banco é a última linha de defesa.
+
+### 🔴 3.2 A validação ainda não funciona
+
+**O que acontece hoje:** foram dois deslizes pequenos, mas que juntos fazem a validação não rodar:
+
+1. O `pom.xml` recebeu a dependência `jakarta.validation-api`. Ela traz **só as anotações** (`@NotBlank`, `@Size` etc.), mas não traz ninguém para *executá-las*.
+2. Em `CompanyRequest`, o campo `employees` (um `Integer`) usa `@NotBlank`. Essa anotação só serve para texto (`String`). Quando a validação estiver ativa, isso causa uma `UnexpectedTypeException`.
+
+**Por que isso é um problema:** sem a implementação, o Spring simplesmente ignora as anotações. Dado inválido passa direto, chega ao banco e estoura como erro 500.
+
+**Como corrigir:**
+
+```xml
+<!-- troque jakarta.validation-api por: -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-validation</artifactId>
+</dependency>
+```
+
+O starter já traz as anotações **e** o Hibernate Validator, que é quem executa as regras.
 
 ```java
 public record CompanyRequest(
         @NotBlank @Size(max = 255) String name,
-        @NotNull @PositiveOrZero Integer employees,
+        @NotNull @PositiveOrZero Integer employees,   // @NotNull para números
         @NotBlank @Size(max = 1000) String description) {}
-
-public record CompanyResponse(
-        Long id, String name, Integer employees,
-        String description, Double averageRating) {}
 ```
 
-E um mapper (classe com métodos estáticos, um `@Component` ou MapStruct) para converter entre DTO e entidade.
+Regra rápida: `@NotBlank` para `String`, `@NotEmpty` para listas, `@NotNull` para o resto.
 
-### 🟠 2.5 DELETE e PUT devolvem texto solto
+### 🟠 3.3 A API ainda recebe e devolve a entidade `Company`
 
-**Problema:** `deleteCompany` responde `200` com `"Company deleted successfully"`. `updateCompany` responde `200` com `"Company updated successfully"`.
+**O que acontece hoje:** os DTOs `CompanyRequest` e `CompanyResponse` foram criados, mas o controller e o service continuam usando a entidade `Company` (a classe com `@Entity`).
 
-**Por que está errado:** o status HTTP já diz se deu certo. Uma string sem estrutura não é JSON, obriga o cliente a tratar texto e mistura idiomas/mensagens com o contrato. A convenção REST é:
-- `DELETE` com sucesso → **204 No Content**, sem corpo.
-- `PUT` com sucesso → **200 OK com o recurso atualizado** (ou 204).
+**Por que isso é um problema:** a entidade representa a **tabela**. O DTO representa o **contrato da API**. Misturar os dois causa problemas como:
 
-**Solução:**
+- O cliente pode mandar `id` e `averageRating` no POST. A média deveria ser calculada só pelo sistema, a partir das reviews.
+- Qualquer mudança na tabela (uma coluna nova, um relacionamento) muda o JSON da API sem ninguém perceber.
+- No futuro, relacionamentos `LAZY` podem causar `LazyInitializationException` ou JSON em loop infinito.
+
+**Como corrigir:** ligar os DTOs que já existem. O controller passa a trabalhar só com DTOs, e um mapper faz a conversão:
 
 ```java
-@DeleteMapping("/{companyId}")
-public ResponseEntity<Void> delete(@PathVariable Long companyId) {
-    companyService.delete(companyId);          // lança NotFound se não existir
-    return ResponseEntity.noContent().build();
-}
-
-@PutMapping("/{companyId}")
-public ResponseEntity<CompanyResponse> update(@PathVariable Long companyId,
-                                              @Valid @RequestBody CompanyRequest request) {
-    return ResponseEntity.ok(companyService.update(companyId, request));
+@PostMapping
+public ResponseEntity<CompanyResponse> create(@Valid @RequestBody CompanyRequest request) {
+    CompanyResponse created = companyService.create(request);
+    URI location = ServletUriComponentsBuilder.fromCurrentRequest()
+            .path("/{id}").buildAndExpand(created.id()).toUri();
+    return ResponseEntity.created(location).body(created);
 }
 ```
 
-### 🟠 2.6 O consumer chama o review_service de volta, de forma síncrona
-
-**Problema:** ao receber a mensagem, `updateCompanyRating` faz uma chamada Feign para `review-service` buscar a média.
-
-**Por que está errado:** a mensageria existe para desacoplar os serviços. Com a chamada de volta, o company volta a depender do review estar no ar, sem circuit breaker nem timeout. Se o review estiver fora, a exceção volta para o listener e o Rabbit reentrega a mensagem sem parar (sem DLQ, ver 2.8).
-
-**Solução (escolha uma):**
-1. **O review_service calcula e envia a média na própria mensagem** (`companyId`, `averageRating`, `reviewCount`). O company só grava. É a opção mais simples e a mais desacoplada.
-2. Guardar `reviewCount` e `ratingSum` na `Company` e atualizar de forma incremental a cada evento (exige evento também para update/delete de review).
-
-Exemplo da opção 1:
-
 ```java
-public record CompanyRatingUpdatedEvent(Long companyId, double averageRating, long reviewCount) {}
+public final class CompanyMapper {
+    private CompanyMapper() {}
+
+    public static Company toEntity(CompanyRequest r) {
+        return new Company(r.name(), r.employees(), r.description());
+    }
+
+    public static CompanyResponse toResponse(Company c) {
+        return new CompanyResponse(c.getId(), c.getName(), c.getEmployees(),
+                c.getDescription(), c.getAverageRating());
+    }
+}
 ```
 
-### 🟠 2.7 Consumer depende da classe concreta e o service mistura camadas
+Repare no `@Valid`: é ele que manda o Spring validar o corpo da requisição.
 
-**Problema:** `ReviewMessageConsumer` injeta `CompanyService` (classe) em vez de `ICompanyService`. Além disso, `ICompanyService.updateCompanyRating` recebe `ReviewMessage`, um DTO da camada de mensageria.
+### 🟠 3.4 Ao receber a mensagem, o company chama o review de volta
 
-**Por que está errado:** se a interface existe, depender da implementação anula o propósito dela (troca de implementação, proxies, mocks em teste). E a camada de serviço passa a conhecer o formato da mensagem do Rabbit: se o formato mudar, o service muda junto.
+**O que acontece hoje:** quando chega uma mensagem do Rabbit, `updateCompanyRating` faz uma chamada HTTP (Feign) para o review-service perguntar a média.
 
-**Solução:** injetar a interface e passar só o que o service precisa:
+**Por que isso é um problema:** a mensageria serve para os serviços **não dependerem** um do outro estar no ar. Com a chamada de volta, o company volta a depender do review, e ainda sem circuit breaker nem timeout. Se o review estiver fora, o listener falha, o Rabbit reentrega a mensagem, falha de novo... e assim indefinidamente (não há DLQ, ver 3.6).
+
+**Como corrigir (escolha uma):**
+
+1. **Recomendado:** o review-service calcula a média e já envia na mensagem. O company só grava. É a solução mais simples e a mais desacoplada.
+2. Guardar `reviewCount` e `ratingSum` na `Company` e atualizar a cada evento. Funciona, mas exige eventos também para edição e exclusão de review.
+
+```java
+public record CompanyRatingUpdatedEvent(Long companyId, Double averageRating, long reviewCount) {}
+```
+
+Com isso, o `ReviewClient` e a dependência do OpenFeign podem sair do company_service.
+
+### 🟠 3.5 O consumer depende da classe concreta, e o service conhece o formato da mensagem
+
+**O que acontece hoje:**
+
+- `ReviewMessageConsumer` injeta `CompanyService` (a classe), e não `ICompanyService` (a interface).
+- O método `updateCompanyRating` da interface recebe `ReviewMessage`, que é um DTO da camada de mensageria.
+
+**Por que isso é um problema:** se existe uma interface, depender da classe concreta anula o motivo dela existir. E o service não deveria saber como é o formato da mensagem do Rabbit: se a mensagem mudar, o service muda junto. Cada camada deve conhecer só o necessário.
+
+**Como corrigir:** o consumer "desembrulha" a mensagem e passa ao service apenas os valores:
 
 ```java
 @RabbitListener(queues = "${app.messaging.rating-queue}")
@@ -177,28 +217,35 @@ public void consume(CompanyRatingUpdatedEvent event) {
 }
 ```
 
-### 🟠 2.8 Configuração do RabbitMQ: nome fixo, beans redundantes, sem DLQ
+### 🟠 3.6 Configuração do RabbitMQ
 
-**Problema:**
-- O nome `"companyRatingQueue"` aparece repetido como string em 4 lugares, entre os dois serviços.
-- O `RabbitTemplate` é redefinido à mão. No company ele nem é usado (o serviço só consome).
-- `RabbitMQConfiguration` está no pacote `messaging`, mas é uma classe de configuração.
-- Não há dead-letter queue.
+**O que acontece hoje:**
 
-**Por que está errado:** uma string repetida fica divergente na primeira refatoração. O Spring Boot já cria um `RabbitTemplate` e o listener container usando o `MessageConverter` declarado como bean, então redefinir é código a mais. Sem DLQ, uma mensagem que sempre falha (ex.: `companyId` inexistente, serviço fora) é reprocessada para sempre ou perdida.
+- O nome `"companyRatingQueue"` está escrito à mão em 4 lugares, nos dois serviços.
+- O `RabbitTemplate` é criado manualmente. No company ele nem é usado, porque esse serviço só consome mensagens.
+- `RabbitMQConfiguration` está no pacote `messaging`, junto com o consumer.
+- Não existe **dead-letter queue (DLQ)**.
 
-**Solução:**
+**Por que isso é um problema:**
+
+- String repetida é um convite a erro de digitação. Basta errar uma letra em um dos lugares e as mensagens somem.
+- O Spring Boot já cria o `RabbitTemplate` sozinho e usa o `MessageConverter` que você declarar como bean. Recriar à mão é código a mais para manter.
+- Sem DLQ, uma mensagem que sempre falha (por exemplo, um `companyId` que não existe) fica sendo reprocessada para sempre, ou é descartada sem deixar rastro.
+
+**Como corrigir:**
 
 ```properties
 app.messaging.rating-queue=company.rating.queue
-spring.rabbitmq.listener.simple.default-requeue-rejected=false
+# tenta 3 vezes; se continuar falhando, manda para a DLQ em vez de reenfileirar
 spring.rabbitmq.listener.simple.retry.enabled=true
 spring.rabbitmq.listener.simple.retry.max-attempts=3
+spring.rabbitmq.listener.simple.default-requeue-rejected=false
 ```
 
 ```java
 @Configuration
 public class RabbitMQConfig {
+
     @Bean
     Queue ratingQueue(@Value("${app.messaging.rating-queue}") String name) {
         return QueueBuilder.durable(name)
@@ -213,22 +260,22 @@ public class RabbitMQConfig {
     }
 
     @Bean
-    MessageConverter messageConverter() { return new JacksonJsonMessageConverter(); }
-    // sem RabbitTemplate manual: o auto-configurado já usa este converter
+    MessageConverter messageConverter() {
+        return new JacksonJsonMessageConverter();
+    }
+    // sem RabbitTemplate manual: o do Spring Boot já usa este converter
 }
 ```
 
-### 🟠 2.9 Sem validação e sem tratamento global de erros
+Uma sugestão de organização: mover a classe para um pacote `config`.
 
-Ver 8.1 e 8.2. No company especificamente: `name`, `employees` e `description` são `nullable = false` no banco, então um POST sem esses campos estoura `DataIntegrityViolationException` e devolve **500** em vez de **400**.
+### 🟠 3.7 `GET /companies` devolve a tabela inteira
 
-### 🟠 2.10 `GET /companies` sem paginação
+**O que acontece hoje:** `findAll()` traz todas as empresas de uma vez.
 
-**Problema:** `findAll()` devolve a tabela inteira.
+**Por que isso é um problema:** com 10 empresas, tudo bem. Com 100 mil, a resposta fica enorme, lenta e consome muita memória.
 
-**Por que está errado:** a resposta cresce sem limite e o tempo de resposta acompanha.
-
-**Solução:**
+**Como corrigir:** usar paginação, que o Spring Data já oferece pronta:
 
 ```java
 @GetMapping
@@ -237,99 +284,107 @@ public Page<CompanyResponse> findAll(@PageableDefault(size = 20, sort = "name") 
 }
 ```
 
-Com `spring.data.web.pageable.serialization-mode=via_dto` (padrão nas versões recentes), o JSON da página fica estável.
+O cliente passa a pedir `GET /companies?page=0&size=20&sort=name`.
 
-### 🟡 2.11 Detalhes de código limpo
+### 🟡 3.8 Detalhes de código limpo
 
-| Problema | Por que | Solução |
+| O que acontece hoje | Por que melhorar | Sugestão |
 |---|---|---|
-| `findByNameIgnoreCase` retorna `Company` e é comparado com `null` | Carrega a entidade inteira só para saber se existe, e usa `null` como sinal | `boolean existsByNameIgnoreCase(String name)` |
-| `companyExists` é público na interface do service | Detalhe interno vazando para o contrato | Tornar privado |
-| Métodos `deleteCompany`/`updateCompany` retornam `boolean` | O controller precisa traduzir `false` em 404 em todo lugar | Lançar `ResourceNotFoundException` e tratar no advice (8.2) |
-| `findById` + `isEmpty()` + `get()` | Verboso | `repository.findById(id).orElseThrow(() -> new ResourceNotFoundException(...))` |
-| Sem `@Transactional` nos métodos de escrita | Ler, alterar e salvar fica fora de uma transação única | `@Transactional` nos métodos de escrita e `@Transactional(readOnly = true)` nas leituras. Com a entidade gerenciada, o `save` depois do setter fica desnecessário |
-| Imports sem uso em `Company` (`JsonIgnore`, `ArrayList`, `List`) | Ruído | Remover |
-| `@GetMapping()` / `@PostMapping()` com parênteses vazios | Ruído | `@GetMapping` |
-| `this.companyService` em alguns métodos e `companyService` em outros | Inconsistência | Padronizar sem `this.` |
-| `ReviewMessage` como classe com getters/setters | Boilerplate | `record` |
-| `Company` sem `equals`/`hashCode` | Problemas em `Set` e comparações de entidades | Implementar baseado no `id` (ou usar a abordagem recomendada pelo Hibernate) |
+| Location do POST usa `company.getId()` (o parâmetro), e não o objeto devolvido pelo service | Funciona por acaso, porque o JPA preenche o id no mesmo objeto. Com DTOs, deixa de funcionar | Usar o id do objeto retornado: `created.id()` |
+| DELETE e PUT declaram `ResponseEntity<String>` mas devolvem 204 sem corpo | O tipo engana quem lê o código | `ResponseEntity<Void>` |
+| `findByNameIgnoreCase` devolve `Company` e é comparado com `null` | Carrega a empresa inteira só para saber se ela existe | `boolean existsByNameIgnoreCase(String name)` |
+| `companyExists` é público na interface | É um detalhe interno do service | Tornar `private` |
+| `deleteCompany` e `updateCompany` devolvem `boolean` | O controller precisa converter `false` em 404 em cada método | Lançar `CompanyNotFoundException` e tratar no advice (10.2) |
+| `findById(...).orElse(null)` seguido de `if (x != null)` | É o que o `Optional` existe para evitar | `findById(id).orElseThrow(() -> new ResourceNotFoundException(...))` |
+| Métodos de escrita sem `@Transactional` | Buscar, alterar e salvar deveriam ser uma operação só | `@Transactional` na escrita e `@Transactional(readOnly = true)` na leitura. Com a transação, o `save` depois dos setters nem é mais necessário |
+| `@GetMapping()` com parênteses vazios | Ruído visual | `@GetMapping` |
+| `this.companyService` em alguns métodos e `companyService` em outros | Inconsistência | Escolher um estilo (sem `this.` é o mais comum) |
+| `ReviewMessage` com getters e setters | Muito código para algo que só carrega dados | Transformar em `record` |
 
 ---
 
-## 3. job_service
+## 4. job_service
 
-### 🔴 3.1 O `companyId` da URL é ignorado em GET por id, PUT e DELETE
+### 🔴 4.1 O `companyId` da URL é ignorado
 
-**Problema:** `findJobById`, `updateJob` e `deleteJob` recebem `companyId` no path mas não o usam. `GET /companies/1/jobs/5` devolve a vaga 5 mesmo que ela seja da empresa 2. `DELETE /companies/999/jobs/5` apaga a vaga 5.
+**O que acontece hoje:** `findJobById`, `updateJob` e `deleteJob` recebem `companyId` na URL, mas não usam. Resultado:
 
-**Por que está errado:** num recurso aninhado, a URI identifica o recurso pelo caminho inteiro. `/companies/1/jobs/5` significa "a vaga 5 **da empresa 1**". Se a vaga não pertence a ela, a resposta correta é 404.
+- `GET /companies/1/jobs/5` devolve a vaga 5 mesmo que ela seja da empresa 2.
+- `DELETE /companies/999/jobs/5` apaga a vaga 5, de qualquer empresa.
 
-**Solução:** filtrar pelos dois ids no repositório:
+**Por que isso é um problema:** num recurso aninhado, a URL inteira identifica o recurso. `/companies/1/jobs/5` quer dizer "a vaga 5 **da empresa 1**". Se ela não pertence à empresa 1, o certo é responder 404.
+
+**Como corrigir:** buscar sempre pelos dois ids:
 
 ```java
+// JobRepository
 Optional<Job> findByIdAndCompanyId(Long id, Long companyId);
 ```
 
 ```java
 public JobResponse findById(Long companyId, Long jobId) {
     Job job = jobRepository.findByIdAndCompanyId(jobId, companyId)
-            .orElseThrow(() -> new ResourceNotFoundException("Job", jobId));
+            .orElseThrow(() -> new ResourceNotFoundException("Vaga", jobId));
     ...
 }
 ```
 
-### 🔴 3.2 `PUT` permite trocar a vaga de empresa pelo corpo
+### 🔴 4.2 O PUT permite mudar a vaga de empresa
 
-**Problema:** `updateJob` recebe a entidade `Job` e faz `jobDb.setCompanyId(job.getCompanyId())`. Se o corpo não tiver `companyId`, a vaga fica com `companyId = null`.
+**O que acontece hoje:** `updateJob` recebe a entidade `Job` e faz `jobDb.setCompanyId(job.getCompanyId())`. Se o JSON não tiver `companyId`, a vaga fica **sem empresa** (`null`).
 
-**Por que está errado:** a empresa já está definida na URI. Aceitar outra no corpo cria duas fontes de verdade, e a ausência do campo apaga o vínculo.
+**Por que isso é um problema:** a empresa já está na URL. Aceitar outra no corpo cria duas "fontes de verdade" que podem discordar. E um campo esquecido apaga o vínculo.
 
-**Solução:** usar um DTO de entrada **sem** `id` e `companyId` e nunca alterar o `companyId` no update (ver 3.5).
+**Como corrigir:** usar um DTO de entrada **sem** `id` e `companyId`, e nunca alterar o `companyId` no update (ver 4.5).
 
-### 🔴 3.3 Fallback do circuit breaker devolve lista vazia com 200
+### 🔴 4.3 Quando o company-service cai, a lista de vagas vem vazia
 
-**Problema:** quando o company-service falha, `companyBreakerFallback` devolve `new ArrayList<>()`, e o cliente recebe `200 []`.
+**O que acontece hoje:** o fallback do circuit breaker (`companyBreakerFallback`) devolve `new ArrayList<>()`, e o cliente recebe `200 []`.
 
-**Por que está errado:** o cliente entende "esta empresa não tem vagas", o que é falso: as vagas existem no `jobdb`, só a informação da empresa ficou indisponível. O fallback esconde a falha e devolve dado errado.
+**Por que isso é um problema:** o cliente entende "essa empresa não tem vagas". Mas as vagas existem, estão no banco do próprio job-service. Só os dados da empresa ficaram indisponíveis. O fallback escondeu a falha e entregou uma informação falsa.
 
-**Solução (escolha uma):**
-- **Degradar com elegância:** devolver as vagas com `company = null` (ou só com o `id`), já que elas estão no banco local.
-- **Falhar de forma explícita:** lançar uma exceção mapeada para **503 Service Unavailable**.
+**Como corrigir (escolha uma):**
+
+- **Degradar com elegância:** devolver as vagas sem os dados da empresa.
+- **Falhar de forma clara:** lançar uma exceção que vira **503 Service Unavailable**.
 
 ```java
 public List<JobResponse> companyFallback(Long companyId, Throwable ex) {
-    log.warn("company-service indisponível, devolvendo vagas sem dados da empresa", ex);
+    log.warn("company-service indisponível; devolvendo vagas sem dados da empresa", ex);
     return jobRepository.findByCompanyId(companyId).stream()
-            .map(job -> mapper.toResponse(job, null))
+            .map(job -> JobMapper.toResponse(job, null))
             .toList();
 }
 ```
 
-### 🔴 3.4 Empresa inexistente vira erro 500
+### 🔴 4.4 Empresa que não existe vira erro 500 (ou vaga órfã)
 
-**Problema:**
-- `addJob` não verifica se a empresa existe. Dá para criar vaga em `/companies/999/jobs`.
-- Em `findJobById`, se o company-service devolver 404, o Feign lança `FeignException.NotFound`, que vira **500**. `findJobById` também não tem circuit breaker.
+**O que acontece hoje:**
 
-**Por que está errado:** integridade referencial entre serviços tem de ser garantida pelo código, porque não há FK entre bancos. E um 404 de um serviço chamado não é erro interno do servidor.
+- `addJob` não confere se a empresa existe. Dá para criar vaga em `/companies/999/jobs`.
+- Em `findJobById`, se o company-service responder 404, o Feign lança `FeignException.NotFound`, que chega ao cliente como **500**. Esse método também não tem circuit breaker.
 
-**Solução:**
-- No `addJob`, consultar o company-service antes de salvar e devolver 404 (ou 422) se a empresa não existir.
-- Tratar `FeignException.NotFound` no `@RestControllerAdvice` ou com um `ErrorDecoder` do Feign.
-- Aplicar `@CircuitBreaker` também em `findJobById`, ou isolar as chamadas num componente `CompanyGateway` com o circuit breaker, para não repetir a anotação em cada método.
+**Por que isso é um problema:** como cada serviço tem seu banco, não existe chave estrangeira entre `jobs` e `companies`. Quem garante que a empresa existe é o código. E um 404 de outro serviço não é um erro interno do seu servidor.
 
-### 🟠 3.5 DTOs com nomes e papéis confusos
+**Como corrigir:**
 
-**Problema:**
-- `CreateJobDto` é usado como **entrada** do POST e também como **resposta** do POST. Tem `id` e `companyId`, que o cliente não deveria enviar.
-- `PUT` recebe a **entidade** `Job`, não um DTO.
+- No `addJob`, consultar o company-service antes de salvar e devolver 404 se a empresa não existir.
+- Tratar `FeignException.NotFound` no `@RestControllerAdvice` (ou com um `ErrorDecoder` do Feign).
+- Colocar as chamadas ao company num componente separado (ex.: `CompanyGateway`) com o `@CircuitBreaker`. Assim todos os métodos ficam protegidos sem repetir a anotação.
+
+### 🟠 4.5 DTOs com nomes e papéis confusos
+
+**O que acontece hoje:**
+
+- `CreateJobDto` é usado como **entrada** e também como **resposta** do POST, e tem `id` e `companyId`, que o cliente não deveria enviar.
+- O PUT recebe a **entidade** `Job`, e não um DTO.
 - `JobDto` e `CreateJobDto` têm exatamente os mesmos campos.
-- O POST devolve `CreateJobDto`, mas o GET devolve `JobWithCompanyDto`: o mesmo recurso tem dois formatos.
+- O POST devolve um formato (`CreateJobDto`) e o GET devolve outro (`JobWithCompanyDto`) para o mesmo recurso.
 - `CompanyDto` não tem `id`.
 
-**Por que está errado:** um DTO de entrada define o que o cliente **pode** enviar. Com `id` nele, o contrato sugere que o cliente escolhe o id. O formato de um recurso deve ser o mesmo em todas as respostas, para o cliente ter um modelo único.
+**Por que isso é um problema:** o DTO de entrada é a lista do que o cliente **pode** mandar. Se ele tem `id`, parece que o cliente escolhe o id. E o mesmo recurso deveria ter sempre o mesmo formato, para quem usa a API ter um modelo só na cabeça.
 
-**Solução:**
+**Como corrigir:** um DTO para entrada e um para saída, usados em todos os endpoints:
 
 ```java
 // entrada: POST e PUT
@@ -349,106 +404,124 @@ public record JobResponse(
 public record CompanySummary(Long id, String name, Double averageRating) {}
 ```
 
-### 🟠 3.6 JSON com nomes de classe: `jobDto` e `companyDto`
+### 🟠 4.6 O JSON mostra nomes de classe Java: `jobDto` e `companyDto`
 
-**Problema:** `JobWithCompanyDto` serializa como `{"jobDto": {...}, "companyDto": {...}}`.
+**O que acontece hoje:** a resposta tem o formato `{"jobDto": {...}, "companyDto": {...}}`.
 
-**Por que está errado:** o sufixo `Dto` é detalhe de implementação Java vazando para o contrato público. O cliente quer `job` e `company`, ou a vaga com a empresa embutida.
+**Por que isso é um problema:** "Dto" é um detalhe interno do Java vazando para quem consome a API. O cliente quer ver `job` e `company`, ou a vaga com a empresa dentro dela.
 
-**Solução:** usar o `JobResponse` do item 3.5 (vaga com `company` embutida).
+**Como corrigir:** o `JobResponse` do item 4.5 já resolve: a vaga com o campo `company` embutido.
 
-### 🟠 3.7 N+1 chamadas HTTP em `findAll`
+### 🟠 4.7 Uma chamada HTTP por vaga em `findAll` (problema N+1)
 
-**Problema:** o loop chama `companyClient.getCompany(...)` **uma vez por vaga**, mas todas as vagas retornadas têm o mesmo `companyId` (o da URL).
+**O que acontece hoje:** o loop chama `companyClient.getCompany(...)` **para cada vaga**. Mas todas as vagas da lista são da mesma empresa (a da URL).
 
-**Por que está errado:** 50 vagas viram 50 requisições HTTP iguais. Cada uma soma latência e conta como falha separada para o circuit breaker.
+**Por que isso é um problema:** 50 vagas viram 50 requisições HTTP idênticas. Cada uma soma tempo de resposta e conta como uma falha separada para o circuit breaker.
 
-**Solução:** buscar a empresa uma vez só:
+**Como corrigir:** buscar a empresa **uma vez só**:
 
 ```java
 CompanySummary company = companyClient.getCompany(companyId);
 return jobRepository.findByCompanyId(companyId).stream()
-        .map(job -> mapper.toResponse(job, company))
+        .map(job -> JobMapper.toResponse(job, company))
         .toList();
 ```
 
-Para a lista, vale também avaliar se a empresa precisa mesmo vir em cada item: o cliente já sabe de qual empresa está listando.
+Vale até se perguntar se a lista precisa trazer a empresa em cada item: o cliente já sabe de qual empresa está listando as vagas.
 
-### 🟠 3.8 Salário como `String`
+### 🟠 4.8 Salário guardado como texto
 
-**Problema:** `minSalary` e `maxSalary` são `String` na entidade e nos DTOs.
+**O que acontece hoje:** `minSalary` e `maxSalary` são `String`.
 
-**Por que está errado:** não dá para ordenar, filtrar por faixa nem validar `min <= max`. O banco aceita `"abc"`.
+**Por que isso é um problema:** não dá para ordenar por salário, filtrar por faixa nem validar que o mínimo é menor que o máximo. E o banco aceita `"abc"` como salário.
 
-**Solução:** `BigDecimal` (com `@Column(precision = 12, scale = 2)`) e uma validação de classe:
+**Como corrigir:** usar `BigDecimal` (o tipo certo para dinheiro em Java; `double` tem erros de arredondamento) e validar a faixa:
 
 ```java
+@Column(nullable = false, precision = 12, scale = 2)
+private BigDecimal minSalary;
+```
+
+```java
+// dentro do JobRequest
 @AssertTrue(message = "minSalary deve ser menor ou igual a maxSalary")
 boolean isSalaryRangeValid() {
     return minSalary == null || maxSalary == null || minSalary.compareTo(maxSalary) <= 0;
 }
 ```
 
-### 🟠 3.9 DELETE/PUT com texto solto e erro de digitação
+### 🟠 4.9 DELETE e PUT devolvem texto solto (e com erro de digitação)
 
-Mesmo problema de 2.5, e as mensagens dizem `"succesfully"` (o certo é "successfully"). Solução: **204** no DELETE e **200 com `JobResponse`** no PUT.
+**O que acontece hoje:** as respostas são `"Job deleted succesfully"` e `"Job updated succesfully"` ("successfully" tem dois "s").
 
-### 🟡 3.10 Detalhes de código limpo
+**Por que isso é um problema:** o status HTTP já diz se deu certo. Uma string solta não é JSON e obriga o cliente a tratar texto.
 
-| Problema | Por que | Solução |
+**Como corrigir:** o mesmo que já foi feito no company: **204** no DELETE e **200 com o `JobResponse`** atualizado no PUT (ou 204).
+
+### 🟡 4.10 Detalhes de código limpo
+
+| O que acontece hoje | Por que melhorar | Sugestão |
 |---|---|---|
-| `@Autowired RestTemplate restTemplate` no `JobService` sem uso, e `AppConfig` criando um `RestTemplate` `@LoadBalanced` | Código morto, injeção por campo e dependência desnecessária (o Feign já faz o trabalho) | Remover o campo e o `AppConfig` |
-| `companyClient` não é `final` | Pode ser reatribuído e quebra a imutabilidade do service | `private final CompanyClient companyClient;` |
-| `findById(...).stream().filter(job -> job.getId().equals(jobId)).findFirst()` | O filtro é redundante: `findById` já garante o id | `findByIdAndCompanyId(...).orElseThrow(...)` |
-| Services retornam `null` (`findJobById`, `getJob`) | Obriga `if (x == null)` em quem chama e esconde o caso "não encontrado" | `Optional` ou exceção de domínio |
-| `JobMapper` é `@Component` mas só tem métodos `static` | Contraditório: o bean nunca é injetado | Escolher um: classe utilitária `final` com construtor privado, ou `@Component` com métodos de instância injetado no service. MapStruct gera isso automaticamente |
-| Mapeamento `Job → JobDto` feito dentro do `JobService` (`getJobWithCompanyDto`) | O mapper existe mas não é usado nesse caso; a responsabilidade fica espalhada | Mover para o mapper |
-| `addJob` altera o DTO recebido (`createJobDto.setCompanyId(...)`) | Efeito colateral no parâmetro | Passar `companyId` ao mapper: `mapper.toEntity(request, companyId)` |
-| Controller chama o mapper (`JobMapper.mapFromClass`) | Mistura responsabilidades: parte do mapeamento no controller, parte no service | O service devolve o DTO de resposta pronto |
-| `new ResponseEntity<>(..., HttpStatus.OK)` num método e `ResponseEntity.ok(...)` nos outros | Inconsistente | `ResponseEntity.ok(...)` |
-| Imports sem uso: `jakarta.persistence.Column` em `JobDto`, `Optional` em `IJobService` | Ruído. Uma anotação JPA num DTO também sugere acoplamento | Remover |
-| `Job.companyId` sem `@Column(nullable = false)` | Vaga sem empresa é estado inválido | `@Column(nullable = false)` e índice em `company_id` |
-| `registerHealthIndicator` e `register-health-indicator` declarados duas vezes | Mesma propriedade em duas grafias | Manter uma (kebab-case é o padrão) |
-| `management.endpoint.health.show-details=ALWAYS` | Expõe detalhes internos (banco, disco, circuit breaker) para qualquer um | `when-authorized` em produção |
-| Feign sem timeout configurado | Uma chamada lenta segura a thread pelo tempo padrão | `spring.cloud.openfeign.client.config.company-service.connect-timeout` / `read-timeout`, ou `@TimeLimiter` |
+| `@Autowired RestTemplate restTemplate` no `JobService`, sem uso, e o `AppConfig` criando esse `RestTemplate` | Código morto. O Feign já faz esse trabalho | Remover o campo e a classe `AppConfig` |
+| `companyClient` não é `final` | Pode ser reatribuído sem querer | `private final CompanyClient companyClient;` |
+| `findById(...).stream().filter(job -> job.getId().equals(jobId))` | O filtro é redundante: `findById` já garante o id | `findByIdAndCompanyId(...).orElseThrow(...)` |
+| `findJobById` e `getJob` devolvem `null` | Obriga `if (x == null)` em quem chama | `Optional` ou exceção |
+| `JobMapper` é `@Component`, mas só tem métodos `static` | Contraditório: o bean é criado e nunca injetado | Ou classe utilitária `final` com construtor privado, ou `@Component` com métodos normais injetado no service. O MapStruct gera isso automaticamente |
+| O mapeamento `Job → JobDto` fica dentro do `JobService` (`getJobWithCompanyDto`) | O mapper existe, mas não é usado nesse caso | Mover para o mapper |
+| `addJob` altera o DTO recebido (`createJobDto.setCompanyId(...)`) | Mexer no parâmetro de entrada é um efeito colateral inesperado | `JobMapper.toEntity(request, companyId)` |
+| O controller chama `JobMapper.mapFromClass` | Parte do mapeamento no controller, parte no service | O service já devolve o DTO de resposta pronto |
+| `new ResponseEntity<>(..., HttpStatus.OK)` em um método e `ResponseEntity.ok(...)` nos outros | Inconsistente | `ResponseEntity.ok(...)` |
+| `import jakarta.persistence.Column` em `JobDto` e `Optional` em `IJobService`, sem uso | Ruído. Um import de JPA num DTO ainda sugere acoplamento | Remover |
+| `Job.companyId` sem `@Column(nullable = false)` | Vaga sem empresa é um estado inválido | `@Column(nullable = false)` e um índice em `company_id` |
+| `registerHealthIndicator` e `register-health-indicator` declarados ao mesmo tempo | A mesma propriedade escrita de dois jeitos | Manter só uma (kebab-case é o padrão do Spring) |
+| `management.endpoint.health.show-details=ALWAYS` | Mostra detalhes internos (banco, disco, circuit breaker) para qualquer pessoa | `when-authorized` |
+| Feign sem timeout | Uma chamada lenta segura a thread por muito tempo | `spring.cloud.openfeign.client.config.company-service.connect-timeout` e `read-timeout` |
 
 ---
 
-## 4. review_service
+## 5. review_service
 
-### 🔴 4.1 `updateReview` grava o título na descrição
+### 🔴 5.1 Atualizar uma review apaga a descrição
 
-**Problema:** `reviewUpdate.setDescription(review.getTitle());`
+**O que acontece hoje:** em `updateReview`:
 
-**Por que está errado:** erro de cópia: toda atualização sobrescreve a descrição com o título.
+```java
+reviewUpdate.setDescription(review.getTitle());   // copia o título para a descrição!
+```
 
-**Solução:** `reviewUpdate.setDescription(request.description());`
+**Por que isso é um problema:** erro de copiar e colar. Toda atualização sobrescreve a descrição com o título.
 
-### 🔴 4.2 O `companyId` da URL é ignorado em GET por id, PUT e DELETE
+**Como corrigir:** `reviewUpdate.setDescription(request.description());`
 
-Mesmo problema de 3.1. `findById`, `deleteReview` e `updateReview` nem recebem `companyId` como parâmetro. `DELETE /companies/1/reviews/7` apaga a review 7 de qualquer empresa.
+Esse é o tipo de erro que um teste simples pegaria na hora (ver [10.3](#-103-testes)).
 
-**Solução:** `Optional<Review> findByIdAndCompanyId(Long id, Long companyId);` e usar os dois ids em todos os métodos.
+### 🔴 5.2 O `companyId` da URL é ignorado
 
-### 🔴 4.3 PUT permite trocar a empresa e a média não é recalculada
+O mesmo problema do item 4.1. Aqui é ainda mais visível: `findById`, `deleteReview` e `updateReview` nem recebem o `companyId`. `DELETE /companies/1/reviews/7` apaga a review 7 de qualquer empresa.
 
-**Problema:**
-- `updateReview` copia `review.getCompanyId()` do corpo, que é `null` se o cliente não enviar.
-- Só o `POST` publica mensagem. `PUT` (que muda a nota) e `DELETE` (que remove uma nota) não publicam nada, então `averageRating` da empresa fica desatualizada.
+**Como corrigir:** `Optional<Review> findByIdAndCompanyId(Long id, Long companyId);` e usar os dois ids em todos os métodos.
 
-**Por que está errado:** o mesmo problema de duas fontes de verdade do item 3.2. E a média é um dado derivado: toda operação que muda o conjunto de notas precisa disparar o recálculo.
+### 🔴 5.3 O PUT pode trocar a empresa, e a média não é recalculada
 
-**Solução:** não aceitar `companyId` no corpo e publicar o evento em create, update e delete (ver 4.4).
+**O que acontece hoje:**
 
-### 🟠 4.4 Publicação da mensagem no controller e fora da transação
+- `updateReview` copia `companyId` do corpo. Se o cliente não mandar, vira `null`.
+- Só o POST envia mensagem para o company. Editar a nota (PUT) ou apagar uma review (DELETE) não avisa ninguém, e a `averageRating` da empresa fica errada.
 
-**Problema:** `ReviewController.addReview` chama `reviewMessageProducer.sendMessage(...)` depois do `addReview`.
+**Por que isso é um problema:** é o mesmo caso de "duas fontes de verdade" do item 4.2. E a média é um **dado derivado**: qualquer operação que muda o conjunto de notas precisa disparar o recálculo.
 
-**Por que está errado:**
-- Regra de negócio ("ao criar uma review, avisar o company") no controller. O controller deveria só traduzir HTTP para chamadas ao service.
-- Não há garantia de consistência: se o envio falhar, a review está salva mas a média nunca é atualizada. Se um dia houver transação envolvendo os dois, a mensagem pode sair antes do commit.
+**Como corrigir:** não aceitar `companyId` no corpo e publicar o evento no create, no update e no delete (ver 5.4).
 
-**Solução:** mover para o service e publicar só **depois do commit**:
+### 🟠 5.4 A mensagem é enviada pelo controller
+
+**O que acontece hoje:** `ReviewController.addReview` salva a review e, em seguida, chama `reviewMessageProducer.sendMessage(...)`.
+
+**Por que isso é um problema:**
+
+- "Ao criar uma review, avisar o company" é uma **regra de negócio**, e regra de negócio mora no service. O controller só deveria traduzir HTTP em chamadas ao service.
+- Não há garantia de consistência: se o envio falhar, a review fica salva e a média nunca é atualizada.
+
+**Como corrigir:** mover para o service e enviar a mensagem **só depois que a transação for confirmada** (commit). O Spring tem um recurso pronto para isso:
 
 ```java
 @Service
@@ -457,39 +530,45 @@ public class ReviewService {
     private final ApplicationEventPublisher events;
 
     public ReviewResponse create(Long companyId, ReviewRequest request) {
-        Review saved = repository.save(mapper.toEntity(request, companyId));
-        events.publishEvent(new ReviewChangedEvent(companyId));
-        return mapper.toResponse(saved);
+        Review saved = repository.save(ReviewMapper.toEntity(request, companyId));
+        events.publishEvent(new ReviewChangedEvent(companyId)); // evento interno
+        return ReviewMapper.toResponse(saved);
     }
 }
 
 @Component
 class ReviewEventsPublisher {
+    // só roda se o commit deu certo
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     void on(ReviewChangedEvent e) {
-        double avg = repository.averageRatingByCompanyId(e.companyId()).orElse(0.0);
-        rabbitTemplate.convertAndSend(queue, new CompanyRatingUpdatedEvent(e.companyId(), avg, ...));
+        Double avg = repository.averageRatingByCompanyId(e.companyId()).orElse(null);
+        long count = repository.countByCompanyId(e.companyId());
+        rabbitTemplate.convertAndSend(queue, new CompanyRatingUpdatedEvent(e.companyId(), avg, count));
     }
 }
 ```
 
-Para garantia total de entrega, o padrão é o **Transactional Outbox**: grava o evento numa tabela na mesma transação e um processo separado publica.
+> 📚 Para ir além: quando é obrigatório que nenhuma mensagem se perca, o padrão usado no mercado é o **Transactional Outbox**. O evento é gravado numa tabela na mesma transação da review, e um processo separado lê essa tabela e publica no Rabbit.
 
-### 🟠 4.5 Endpoint `/averagerating`: nome, local do cálculo e resposta
+### 🟠 5.5 O endpoint `/averagerating`
 
-**Problema:**
-- `GET /companies/{id}/reviews/averagerating`: tudo junto e minúsculo, sem hífen.
+**O que acontece hoje:**
+
+- A URL é `/companies/{id}/reviews/averagerating`, tudo junto e em minúsculas.
 - A média é calculada **no controller**, carregando todas as reviews na memória.
-- Devolve um `Double` cru (`4.25`) em vez de um objeto JSON.
-- Sem reviews, devolve `0.0`, que não se distingue de "nota média zero".
-- Fica sob `/reviews/...` mas não é uma review. `/reviews/averagerating` também conflita conceitualmente com `/reviews/{reviewId}`.
+- A resposta é um número solto (`4.25`), e não um objeto JSON.
+- Sem reviews, devolve `0.0`, que não dá para distinguir de "a nota média é zero".
 
-**Por que está errado:** URIs REST usam `kebab-case`. Cálculo é responsabilidade do service, e agregação deve rodar no banco. Uma resposta primitiva não pode ganhar campos depois sem quebrar o cliente.
+**Por que isso é um problema:**
 
-**Solução:**
+- URLs REST usam `kebab-case` (palavras separadas por hífen).
+- Cálculo é responsabilidade do service. E conta de média é algo que o banco faz muito melhor do que trazer todos os registros para o Java.
+- Um número solto não pode ganhar campos novos depois sem quebrar quem já usa.
+
+**Como corrigir:**
 
 ```java
-// repository
+// ReviewRepository: o banco calcula
 @Query("select avg(r.rating) from Review r where r.companyId = :companyId")
 Optional<Double> averageRatingByCompanyId(Long companyId);
 
@@ -497,7 +576,7 @@ long countByCompanyId(Long companyId);
 ```
 
 ```java
-// controller
+// ReviewController
 @GetMapping("/rating-summary")
 public RatingSummaryResponse ratingSummary(@PathVariable Long companyId) {
     return reviewService.ratingSummary(companyId);
@@ -506,15 +585,17 @@ public RatingSummaryResponse ratingSummary(@PathVariable Long companyId) {
 public record RatingSummaryResponse(Long companyId, Double averageRating, long reviewCount) {}
 ```
 
-Resultado: `GET /companies/1/reviews/rating-summary` → `{"companyId":1,"averageRating":4.25,"reviewCount":8}`, com `averageRating: null` quando não houver reviews. Se for aplicada a solução 2.6 (a média vai na mensagem), este endpoint deixa de ser necessário para o company e pode virar só leitura pública, ou ser removido.
+Resultado: `GET /companies/1/reviews/rating-summary` → `{"companyId":1,"averageRating":4.25,"reviewCount":8}`, com `averageRating: null` quando não houver reviews.
 
-### 🟠 4.6 Entidade exposta na API e sem validação
+Se a solução do item 3.4 for aplicada (a média vai na mensagem), o company deixa de precisar desse endpoint.
 
-**Problema:** o controller recebe e devolve `Review`. Não há limite para `rating`: dá para enviar `-50` ou `1000`.
+### 🟠 5.6 Entidade exposta na API e sem validação
 
-**Por que está errado:** os mesmos motivos de 2.4. O cliente também pode enviar `id` e `companyId`, e `createdAt` aparece no JSON no formato que o Jackson escolher.
+**O que acontece hoje:** o controller recebe e devolve a entidade `Review`, e não há limite para a nota: dá para enviar `-50` ou `1000`.
 
-**Solução:**
+**Por que isso é um problema:** os mesmos motivos do item 3.3. O cliente ainda pode enviar `id` e `companyId`.
+
+**Como corrigir:**
 
 ```java
 public record ReviewRequest(
@@ -524,43 +605,47 @@ public record ReviewRequest(
 
 public record ReviewResponse(
         Long id, String title, String description,
-        double rating, Instant createdAt) {}
+        Double rating, Instant createdAt) {}
 ```
 
-`addReview` também deve verificar se a empresa existe antes de salvar, como em 3.4.
+O `addReview` também deveria confirmar que a empresa existe antes de salvar, como no item 4.4.
 
-### 🟠 4.7 Controller depende da classe concreta
+### 🟠 5.7 O controller depende da classe concreta
 
-**Problema:** `ReviewController` injeta `ReviewService` em vez de `IReviewService`.
+**O que acontece hoje:** `ReviewController` injeta `ReviewService`, e não `IReviewService`.
 
-**Solução:** injetar a interface (ou remover a interface, ver 8.6).
+**Como corrigir:** injetar a interface, ou remover a interface de vez (ver 10.6). O importante é ser consistente.
 
-### 🟡 4.8 Detalhes de código limpo
+### 🟡 5.8 Detalhes de código limpo
 
-| Problema | Por que | Solução |
+| O que acontece hoje | Por que melhorar | Sugestão |
 |---|---|---|
-| `import jakarta.websocket.server.PathParam;` sem uso | Import errado (é de WebSocket, não de Spring MVC) e sem uso | Remover |
-| `@GetMapping("{reviewId}")` e `@DeleteMapping("{reviewId}")` sem `/`, mas `@PutMapping("/{reviewId}")` com | Inconsistente | Sempre `"/{reviewId}"` |
-| Mensagem `"Company updated successfully"` no update de review | Texto copiado de outro controller | Devolver 200 com `ReviewResponse` (sem mensagem) |
-| DELETE/PUT devolvem texto | Ver 2.5 | 204 / 200 com DTO |
-| `LocalDateTime` em `createdAt` | Sem fuso: o valor depende do relógio do servidor | `Instant` ou `OffsetDateTime`, e `@CreationTimestamp` no lugar do `@PrePersist` manual |
-| `rating` como `double` primitivo | Um JSON sem `rating` vira `0.0` sem erro | `Double` no DTO com `@NotNull` |
-| Construtor de `Review` sem `companyId` | Cria entidade em estado incompleto | Incluir `companyId` no construtor |
-| Sem `@Transactional`, `boolean` para "não encontrado", `findById` + `isEmpty` + `get` | Ver 2.11 | Mesmas soluções |
-| `RabbitTemplate` redefinido à mão | Ver 2.8 | Remover; manter só `Queue` e `MessageConverter` |
-| `#postgresq` no `application.properties` | Erro de digitação no comentário | `#postgresql` |
+| `import jakarta.websocket.server.PathParam;` | É de WebSocket, não do Spring MVC, e nem é usado | Remover |
+| `@GetMapping("{reviewId}")` sem barra e `@PutMapping("/{reviewId}")` com barra | Funciona, mas é inconsistente | Sempre `"/{reviewId}"` |
+| O update de review responde `"Company updated successfully"` | Texto copiado de outro controller | 200 com `ReviewResponse`, ou 204 |
+| DELETE e PUT devolvem texto | Ver 4.9 | 204 / 200 com DTO |
+| `createdAt` é `LocalDateTime` | Não guarda fuso horário: o valor depende do relógio do servidor | `Instant` com `@CreationTimestamp` no lugar do `@PrePersist` manual |
+| `rating` é `double` (primitivo) | Se o JSON não tiver `rating`, vira `0.0` sem nenhum erro | `Double` no DTO, com `@NotNull` |
+| Construtor de `Review` sem `companyId` | Permite criar uma review "pela metade" | Incluir `companyId` no construtor |
+| Sem `@Transactional`, `boolean` para "não encontrado", `findById` + `isEmpty` + `get` | Ver 3.8 | Mesmas sugestões |
+| `RabbitTemplate` criado à mão | Ver 3.6 | Remover; manter só `Queue` e `MessageConverter` |
+| Comentário `#postgresq` no `application.properties` | Erro de digitação | `#postgresql` |
 
 ---
 
-## 5. api-gateway
+## 6. api-gateway
 
-### 🟠 5.1 Rotas com `localhost:porta` em vez do Eureka
+### 🟠 6.1 As rotas usam endereço fixo em vez do Eureka
 
-**Problema:** `routes[*].uri=http://localhost:8081` (e 8082, 8083).
+**O que acontece hoje:** as rotas apontam para `http://localhost:8081` e, no perfil `docker`, para `http://company-service:8081`. Por causa disso, o `application-docker.properties` precisou **repetir todas as 6 rotas** só para trocar o endereço.
 
-**Por que está errado:** o gateway já é cliente do Eureka, mas não usa a descoberta. Não há balanceamento entre instâncias, não funciona em Docker (o `localhost` do container não é o host) e qualquer mudança de porta exige mudar o gateway.
+**Por que isso é um problema:** o gateway já está registrado no Eureka, mas não usa a descoberta de serviços. Na prática:
 
-**Solução:** usar o load balancer por nome do serviço:
+- Não há balanceamento de carga: se você subir 3 instâncias do job-service, o gateway só conhece uma.
+- Qualquer mudança de porta ou de nome exige mexer no gateway.
+- A duplicação entre os dois arquivos é fácil de ficar desatualizada.
+
+**Como corrigir:** o prefixo `lb://` (load balancer) faz o gateway perguntar ao Eureka onde o serviço está:
 
 ```properties
 spring.cloud.gateway.server.webmvc.routes[0].uri=lb://company-service
@@ -568,86 +653,127 @@ spring.cloud.gateway.server.webmvc.routes[1].uri=lb://job-service
 spring.cloud.gateway.server.webmvc.routes[2].uri=lb://review-service
 ```
 
-Arquivo `.yml` também ajuda: com 6 rotas, os índices `routes[3].filters[0]` ficam difíceis de manter.
+Bônus: como `lb://company-service` funciona igual no local e no Docker, as rotas podem sair do `application-docker.properties`. Também vale migrar para `application.yml`: com várias rotas, os índices `routes[3].filters[0]` ficam difíceis de ler.
 
-### 🟠 5.2 Actuator dos serviços exposto pelo gateway
+### 🟠 6.2 O Actuator dos serviços fica acessível pelo gateway
 
-**Problema:** as rotas `/{servico}/actuator/**` deixam qualquer cliente externo acessar o Actuator de todos os serviços. No job, isso inclui `health` com `show-details=ALWAYS`.
+**O que acontece hoje:** as rotas `/{servico}/actuator/**` permitem que qualquer cliente externo acesse o Actuator de todos os serviços.
 
-**Por que está errado:** o Actuator é uma interface operacional. Ele mostra versão, dependências, estado do banco e do circuit breaker: informação útil para um atacante e sem utilidade para o usuário da API.
+**Por que isso é um problema:** o Actuator é uma ferramenta de operação. Ele mostra versão, dependências, estado do banco e do circuit breaker. Isso é útil para um atacante e não tem utilidade para quem consome a API.
 
-**Solução:** remover essas rotas do gateway e acessar o Actuator pela rede interna, ou proteger com autenticação (Spring Security) e restringir a `health` com `show-details=when-authorized`.
+**Como corrigir:** remover essas rotas e acessar o Actuator pela rede interna (no Kubernetes, por exemplo, com `kubectl port-forward`). Se precisar mesmo expor, proteger com Spring Security.
 
-### 🟡 5.3 Outros pontos
+### 🟡 6.3 Outros pontos
 
-| Problema | Por que | Solução |
+| O que acontece hoje | Por que melhorar | Sugestão |
 |---|---|---|
-| `logging.level.org.springframework.cloud.gateway=TRACE` | Log enorme e possível vazamento de headers/tokens | `INFO` por padrão; `TRACE` só num perfil `dev` |
-| Endpoint interno (`/reviews/averagerating`) acessível de fora pelo padrão `/companies/*/reviews/**` | Endpoints de uso entre serviços não deveriam ser públicos | Ver 4.5; se ficar interno, bloquear no gateway |
-| Sem autenticação/autorização | Qualquer um cria, altera e apaga empresas | Spring Security com OAuth2 Resource Server (JWT) no gateway, quando o projeto chegar nessa etapa |
-| Sem rate limiting, CORS ou timeouts | Proteções que normalmente ficam no gateway | Avaliar conforme a evolução |
-| Sem Dockerfile nem perfil `docker` | Não pode entrar no compose | Ver 8.9 |
+| `logging.level.org.springframework.cloud.gateway=TRACE` | Gera um volume enorme de log e pode expor headers e tokens | `INFO` por padrão; `TRACE` só num perfil `dev` |
+| O endpoint de média (`/reviews/averagerating`) é acessível de fora | Endpoints usados só entre serviços não deveriam ser públicos | Ver 5.5 |
+| Sem autenticação | Qualquer pessoa cria, altera e apaga empresas | Quando o projeto chegar nessa etapa: Spring Security com OAuth2 Resource Server (JWT) no gateway |
+| Sem rate limiting, CORS e timeouts | São proteções que normalmente ficam no gateway | Avaliar conforme o projeto evoluir |
 
 ---
 
-## 6. config-server
+## 7. config-server
 
-**Bom:** `@EnableConfigServer`, Git como backend e registro no Eureka.
+**O que está bom:** `@EnableConfigServer`, Git como fonte das configurações e registro no Eureka.
 
-| Problema | Por que | Solução |
+| O que acontece hoje | Por que melhorar | Sugestão |
 |---|---|---|
-| Só o `job_service` usa o Config Server | Os outros repetem as mesmas propriedades (Eureka, telemetry, datasource). Uma mudança exige editar N arquivos | Adicionar `spring-cloud-starter-config` e `spring.config.import=optional:configserver:` em todos; mover as configurações comuns para `application.properties` no repositório de config, e as específicas para `{servico}.properties` |
-| Sem `default-label` nem `clone-on-start` | O branch padrão fica implícito e um erro de clone só aparece na primeira requisição | `spring.cloud.config.server.git.default-label=main` e `clone-on-start=true` |
-| Senhas no repositório de configuração (se forem para lá) | Segredo em Git | Variáveis de ambiente, `{cipher}` do Config Server ou um cofre (Vault) |
+| Só o `job_service` usa o Config Server | Os outros serviços repetem as mesmas propriedades (Eureka, telemetria, datasource). Uma mudança exige editar vários arquivos | Adicionar `spring-cloud-starter-config` e `spring.config.import` em todos. Configurações comuns vão para `application.properties` no repositório de config; as específicas, para `{nome-do-servico}.properties` |
+| Sem `default-label` nem `clone-on-start` | O branch fica implícito, e um erro no clone só aparece na primeira requisição | `spring.cloud.config.server.git.default-label=main` e `clone-on-start=true` |
+| Sem Actuator | O Kubernetes precisa usar `tcpSocket` como probe, que só confirma que a porta abriu, e não que a aplicação está saudável | Adicionar `spring-boot-starter-actuator` e usar `/actuator/health` nas probes |
+| Senhas no repositório de config (se forem para lá) | Segredo em Git fica no histórico para sempre | Variáveis de ambiente, `{cipher}` do Config Server ou um cofre como o Vault |
 
 ---
 
-## 7. service-registry
+## 8. service-registry
 
-**Bom:** configuração mínima e correta de um Eureka standalone (`register-with-eureka=false`, `fetch-registry=false`).
+**O que está bom:** configuração mínima e correta de um Eureka standalone (`register-with-eureka=false`, `fetch-registry=false`), e o hostname já é sobrescrito no perfil `docker`. ✅
 
-| Problema | Por que | Solução |
+| O que acontece hoje | Por que melhorar | Sugestão |
 |---|---|---|
-| `spring-boot-starter-webmvc` declarado explicitamente | O starter do Eureka Server já traz o web | Pode remover (opcional) |
-| `eureka.instance.hostname=localhost` fixo | Não funciona dentro do Docker | Externalizar por perfil/variável |
-| Sem Dockerfile | Não pode entrar no compose | Ver 8.9 |
+| `spring-boot-starter-webmvc` declarado no pom | O starter do Eureka Server já traz o web | Pode remover (opcional) |
+| Pastas `static` e `templates` vazias | Sobra do Initializr | Pode remover |
 
 ---
 
-## 8. Pontos transversais (todos os serviços)
+## 9. Docker e Kubernetes
 
-### 🟠 8.1 Bean Validation ausente
+Esta parte evoluiu bastante: todos os módulos têm Dockerfile, o compose sobe a aplicação inteira e já existem manifests de Kubernetes bem cuidados. Os pontos abaixo são refinamentos.
 
-**Problema:** nenhum serviço tem `spring-boot-starter-validation` nem `@Valid`.
+### 🟠 9.1 Senha do banco num ConfigMap
 
-**Por que está errado:** dado inválido chega ao banco e vira **500** (constraint violada) em vez de **400** com uma mensagem clara.
+**O que acontece hoje:** `k8s/services/postgres/postgres-configmap.yml` guarda `POSTGRES_PASSWORD: admin`.
 
-**Solução:**
+**Por que isso é um problema:** ConfigMap é para configuração comum. Para dados sensíveis, o Kubernetes tem o objeto **Secret**, que pode ser protegido com permissões (RBAC) e criptografia separadas.
 
-```xml
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-validation</artifactId>
-</dependency>
+**Como corrigir:**
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: admin   # em ambiente real, não versionar este arquivo
 ```
 
-E `@Valid @RequestBody XxxRequest request` nos controllers, com as anotações nos records (exemplos em 2.4, 3.5 e 4.6).
+E nos serviços Spring, passar `SPRING_DATASOURCE_PASSWORD` a partir desse Secret (ver também 10.5).
 
-### 🟠 8.2 Tratamento de erros centralizado com `ProblemDetail`
+### 🟡 9.2 Ajustes no Dockerfile
 
-**Problema:** cada controller trata "não encontrado" com `if (boolean)` / `Optional`, e qualquer outra exceção vira um 500 genérico. Os formatos de erro variam.
+| O que acontece hoje | Por que melhorar | Sugestão |
+|---|---|---|
+| A aplicação roda como `root` dentro do container | Se alguém explorar uma falha na aplicação, ganha poderes de root no container | Criar um usuário e usar `USER app` antes do `ENTRYPOINT` |
+| Os 6 Dockerfiles são idênticos, exceto o `EXPOSE` | Uma correção precisa ser repetida 6 vezes | Aceitável. Como alternativa, `./mvnw spring-boot:build-image` (Buildpacks) gera a imagem sem Dockerfile, já com usuário não-root |
 
-**Por que está errado:** erro é parte do contrato da API. O cliente precisa de um formato único. A RFC 9457 (Problem Details) é o padrão, e o Spring já tem suporte nativo.
+### 🟡 9.3 Ajustes no docker-compose
 
-**Solução:** exceções de domínio + um `@RestControllerAdvice` por serviço:
+| O que acontece hoje | Por que melhorar | Sugestão |
+|---|---|---|
+| Healthcheck dos serviços Spring via `/dev/tcp` (só confere se a porta abriu) | Porta aberta não quer dizer aplicação pronta | Usar `/actuator/health` (exige `curl` ou `wget` na imagem, ou adicionar o Actuator onde falta) |
+| `company-service`, `job-service` e `review-service` não têm healthcheck | O gateway usa `depends_on` simples, sem `condition: service_healthy`, e pode subir antes deles | Adicionar healthcheck nos três e usar a condição no gateway |
+| A rede se chama `postgres`, mas liga todos os containers | O nome confunde quem lê | Renomear para algo como `jobapp` |
+| `openzipkin/zipkin` e `otel/opentelemetry-collector-contrib` sem versão | Sem tag = `latest`. Um dia a imagem muda e o ambiente quebra sem você ter mexido em nada | Fixar a versão, como já foi feito com `postgres:17` |
+| RabbitMQ e Zipkin expostos em todas as interfaces | O Postgres está preso a `127.0.0.1`, mas esses não | `"127.0.0.1:5672:5672"` etc. |
+
+### 🟡 9.4 Eureka dentro do Kubernetes
+
+Isto é mais uma reflexão do que um problema. O Kubernetes já faz **service discovery** sozinho: um `Service` chamado `company-service` já resolve para os pods certos, com balanceamento. Rodar o Eureka dentro do cluster duplica essa função.
+
+Para um projeto de estudo, manter o Eureka é ótimo: você aprende os dois mundos. Mas saiba que, em produção com Kubernetes, o mais comum é remover o Eureka e usar os Services do cluster (ou o **Spring Cloud Kubernetes**).
+
+---
+
+## 10. Pontos que valem para todos os serviços
+
+### 🟠 10.1 Validação de entrada (Bean Validation)
+
+**O que acontece hoje:** nenhum serviço valida os dados recebidos. (O company começou, mas falta o starter, ver 3.2.)
+
+**Por que isso é um problema:** dado inválido chega ao banco e vira erro 500. O certo é responder **400 Bad Request** dizendo qual campo está errado.
+
+**Como corrigir:** adicionar `spring-boot-starter-validation` em cada serviço, colocar as anotações nos DTOs e usar `@Valid @RequestBody` nos controllers (exemplos em 3.2, 4.5 e 5.6).
+
+### 🟠 10.2 Tratamento de erros num lugar só, com `ProblemDetail`
+
+**O que acontece hoje:** cada controller trata "não encontrado" com `if` e `boolean`, e qualquer outra exceção vira um 500 genérico. Cada erro tem um formato diferente.
+
+**Por que isso é um problema:** o formato do erro faz parte do contrato da API. Quem consome precisa de um padrão único. Existe uma especificação para isso (RFC 9457, "Problem Details"), e o Spring já tem suporte pronto com a classe `ProblemDetail`.
+
+**Como corrigir:** criar exceções de negócio e um `@RestControllerAdvice` em cada serviço. Ele "escuta" as exceções de todos os controllers e as converte na resposta HTTP certa:
 
 ```java
 public class ResourceNotFoundException extends RuntimeException {
     public ResourceNotFoundException(String resource, Object id) {
-        super("%s com id %s não encontrado".formatted(resource, id));
+        super("%s com id %s não encontrado(a)".formatted(resource, id));
     }
 }
+```
 
+```java
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
@@ -656,98 +782,116 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
-    @ExceptionHandler(ConflictException.class)
-    ProblemDetail handleConflict(ConflictException ex) {
+    @ExceptionHandler(CompanyAlreadyExistsException.class)
+    ProblemDetail handleConflict(CompanyAlreadyExistsException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
 }
 ```
 
-Estender `ResponseEntityExceptionHandler` já devolve erros de validação (`@Valid`) como `ProblemDetail` com status 400. Também dá para ligar `spring.mvc.problemdetails.enabled=true`.
+Ao estender `ResponseEntityExceptionHandler`, os erros de validação do `@Valid` já saem como `ProblemDetail` com status 400, sem código extra.
 
-Com isso, os controllers ficam lineares:
+O ganho aparece nos controllers, que ficam bem mais simples:
 
 ```java
 @GetMapping("/{companyId}")
 public CompanyResponse findById(@PathVariable Long companyId) {
-    return companyService.findById(companyId); // lança 404 se não existir
+    return companyService.findById(companyId); // se não existir, o advice devolve 404
 }
 ```
 
-### 🟠 8.3 Testes
+### 🟠 10.3 Testes
 
-**Problema:** cada serviço só tem o `contextLoads()` gerado pelo Initializr.
+**O que acontece hoje:** cada serviço só tem o teste `contextLoads()` gerado pelo Spring Initializr.
 
-**Por que está errado:** vários dos bugs acima (2.1, 2.2, 4.1, 3.1) seriam pegos por testes simples.
+**Por que isso é um problema:** vários bugs desta lista (4.1, 5.1, 3.1) seriam pegos por testes curtos. Testes também dão segurança para fazer as refatorações sugeridas aqui sem medo de quebrar algo.
 
-**Solução:**
-- **Unitários** dos services com Mockito.
-- **`@WebMvcTest`** dos controllers: status, `Location`, validação, formato do erro.
-- **`@DataJpaTest`** com **Testcontainers** (PostgreSQL) para os repositórios.
-- **Testes de contrato** entre job → company (Spring Cloud Contract ou WireMock), para garantir que o `CompanyDto` do job continua batendo com a resposta do company.
+**Como começar (do mais simples ao mais completo):**
 
-### 🟠 8.4 Schema com `ddl-auto=update`
+1. **Testes unitários** dos services, com Mockito simulando o repository.
+2. **`@WebMvcTest`** nos controllers: status HTTP, header `Location`, validação, formato do erro.
+3. **`@DataJpaTest` com Testcontainers**, que sobe um PostgreSQL de verdade num container para testar os repositories.
+4. **Testes de contrato** entre job e company (Spring Cloud Contract ou WireMock), para garantir que o `CompanyDto` do job continua batendo com a resposta do company.
 
-**Problema:** o Hibernate altera o schema sozinho em todos os serviços.
+### 🟠 10.4 O Hibernate altera o banco sozinho (`ddl-auto=update`)
 
-**Por que está errado:** o `update` nunca remove nem renomeia colunas, não é versionado nem revisável, e pode fazer alterações destrutivas em produção.
+**O que acontece hoje:** todos os serviços usam `spring.jpa.hibernate.ddl-auto=update`.
 
-**Solução:** **Flyway** (`spring-boot-starter-flyway` no Boot 4) com scripts `V1__create_companies.sql` etc., e `spring.jpa.hibernate.ddl-auto=validate`.
+**Por que isso é um problema:** é prático no começo, mas o `update` nunca remove nem renomeia colunas, não deixa histórico das mudanças e pode fazer alterações perigosas em produção.
 
-### 🟠 8.5 Credenciais em texto puro
+**Como corrigir:** usar **Flyway** (`spring-boot-starter-flyway`). Você escreve scripts SQL versionados (`V1__create_companies.sql`, `V2__add_unique_name.sql`...), e o Flyway aplica em ordem. Depois, troque para `ddl-auto=validate`: o Hibernate só confere se as entidades batem com as tabelas.
 
-**Problema:** `admin/admin` e `guest/guest` no `application.properties` de todos os serviços.
+### 🟠 10.5 Senhas em texto puro
 
-**Solução:** `spring.datasource.password=${DB_PASSWORD}` com valor vindo de variável de ambiente (`.env` fora do Git, secrets do Docker/Kubernetes).
+**O que acontece hoje:** `admin/admin` e `guest/guest` estão escritos no `application.properties` de todos os serviços.
 
-### 🟡 8.6 Prefixo `I` nas interfaces
+**Como corrigir:** ler de variáveis de ambiente:
 
-**Problema:** `ICompanyService`, `IJobService`, `IReviewService`.
+```properties
+spring.datasource.password=${DB_PASSWORD}
+```
 
-**Por que:** é convenção de C#/.NET. Em Java, o padrão é a interface com o nome do conceito (`CompanyService`) e a implementação com sufixo (`CompanyServiceImpl`), ou nenhuma interface quando só existe uma implementação: o Spring cria proxies de classe sem problema e o Mockito também faz mock de classe.
+O valor vem de um arquivo `.env` fora do Git (no compose) ou de um Secret (no Kubernetes, ver 9.1).
 
-**Solução:** renomear para `CompanyService` / `CompanyServiceImpl`, ou remover as interfaces. Mais importante que o nome é ser consistente: hoje dois dos três serviços injetam a classe concreta mesmo com a interface existindo (2.7 e 4.7).
+### 🟡 10.6 Prefixo `I` nas interfaces
 
-### 🟡 8.7 Documentação da API
+**O que acontece hoje:** `ICompanyService`, `IJobService`, `IReviewService`.
 
-**Problema:** não há OpenAPI/Swagger.
+**Por que mudar:** o prefixo `I` é uma convenção do C#/.NET. Em Java, o comum é a interface ter o nome do conceito (`CompanyService`) e a implementação levar o sufixo (`CompanyServiceImpl`). Outra opção bem aceita é **não ter interface** quando só existe uma implementação: o Spring e o Mockito funcionam perfeitamente com classes.
 
-**Solução:** `springdoc-openapi-starter-webmvc-ui` em cada serviço (verificar a versão compatível com o Boot 4) e, opcionalmente, agregação no gateway. Os records com Bean Validation já geram um schema rico.
+**O mais importante é ser consistente.** Hoje, em dois dos três serviços, alguém injeta a classe concreta mesmo com a interface existindo (3.5 e 5.7).
 
-### 🟡 8.8 Boilerplate de getters/setters
+### 🟡 10.7 Documentação da API
 
-**Problema:** DTOs e entidades com dezenas de linhas de getters/setters.
+**O que acontece hoje:** não há OpenAPI/Swagger.
 
-**Solução:** `record` para todos os DTOs e mensagens (Java 21). Nas entidades JPA (que não podem ser records), manter os getters/setters ou usar Lombok (`@Getter @Setter`, evitando `@Data` em entidades).
+**Como corrigir:** adicionar `springdoc-openapi-starter-webmvc-ui` em cada serviço (confira a versão compatível com o Boot 4). Você ganha uma página interativa em `/swagger-ui.html` para testar os endpoints, e as anotações de validação dos records aparecem automaticamente na documentação.
 
-### 🟡 8.9 Containerização incompleta
+### 🟡 10.8 Muito getter e setter
 
-**Problema:** só o `company_service` tem `Dockerfile` e perfil `docker`. O `docker-compose.yaml` só sobe a infraestrutura (Postgres, Rabbit, OTel, Zipkin), nenhum serviço da aplicação.
+**O que acontece hoje:** DTOs e mensagens com dezenas de linhas de getters e setters.
 
-**Solução:**
-- Replicar o `Dockerfile` (que está bom) e o `.dockerignore` nos outros 5 módulos.
-- Adicionar os serviços ao compose, com `depends_on` + `condition: service_healthy` (registry → config → serviços → gateway) e `SPRING_PROFILES_ACTIVE=docker`.
-- Considerar `spring-boot:build-image` (Buildpacks) como alternativa sem Dockerfile.
-- No Dockerfile, rodar como usuário não-root e adicionar `HEALTHCHECK` com o Actuator.
-- A rede do compose se chama `postgres` mas liga todos os containers: renomear para algo como `jobapp`.
-- Fixar as tags das imagens `openzipkin/zipkin` e `otel/opentelemetry-collector-contrib` (hoje sem tag = `latest`).
+**Como corrigir:** usar `record` (Java 16+) em todos os DTOs e mensagens. Uma linha substitui a classe inteira. Entidades JPA não podem ser records; nelas, mantenha os getters e setters ou use Lombok (`@Getter @Setter`; evite `@Data` em entidades, porque ele gera `equals`/`hashCode` que causam problemas com o Hibernate).
 
-### 🟡 8.10 Consistência de versionamento e estrutura
+### 🟡 10.9 Padronização
 
-- Sem versionamento da API (`/api/v1/companies`). Não é obrigatório, mas vale definir antes que existam clientes externos.
-- Nomes de módulos misturam `snake_case` (`company_service`) e `kebab-case` (`api-gateway`). O padrão Maven/Spring é kebab-case.
-- O `ReviewMessage` é duplicado em review e company. Em microsserviços isso é aceitável (evita uma biblioteca compartilhada acoplando deploys), mas o contrato precisa ser documentado e testado (8.3).
-- `sampling.probability=1.0` está certo para estudo. Em produção, usar algo como `0.1`.
+- **Versão na URL** (`/api/v1/companies`): não é obrigatório, mas é bom decidir antes de existirem clientes externos.
+- **Nome dos módulos:** hoje há `snake_case` (`company_service`) misturado com `kebab-case` (`api-gateway`). O padrão no Maven e no Spring é kebab-case.
+- **`ReviewMessage` duplicada** em review e company: em microsserviços isso é aceitável (uma biblioteca compartilhada acoplaria os deploys), mas o contrato precisa ser documentado e testado (10.3).
+- **`sampling.probability=1.0`** (rastrear 100% das requisições) é ótimo para estudo. Em produção, algo como `0.1` já é suficiente.
 
 ---
 
-## 9. Ordem sugerida de execução
+## 11. Ordem sugerida
 
-1. **Bugs** (rápidos e de alto impacto): 2.1, 2.2, 2.3, 4.1, 3.1/4.2, 3.2/4.3.
-2. **Base de qualidade**: validação (8.1) + `@RestControllerAdvice` com `ProblemDetail` (8.2). Isso simplifica tudo o que vem depois.
-3. **DTOs** (records) em company e review, e reorganização dos DTOs do job (2.4, 3.5, 3.6, 4.6), com 204/200 nos DELETE/PUT (2.5).
-4. **Comunicação entre serviços**: fallback correto (3.3), 404 do Feign (3.4), N+1 (3.7), média na mensagem + DLQ + eventos em update/delete (2.6, 2.8, 4.3, 4.4).
-5. **Gateway com `lb://`** e sem Actuator público (5.1, 5.2).
-6. **Testes** (8.3) cobrindo os pontos acima.
-7. **Infra**: Flyway, segredos, Config Server para todos, compose completo (8.4, 8.5, 6, 8.9).
-8. **Limpeza**: itens 🟡 restantes.
+Não precisa fazer tudo de uma vez. Uma sequência que funciona bem:
+
+1. **Bugs rápidos:** 3.1, 3.2, 5.1, 4.1/5.2, 4.2/5.3.
+2. **A base:** validação (10.1) + `@RestControllerAdvice` com `ProblemDetail` (10.2). Isso simplifica todo o resto.
+3. **DTOs:** ligar os do company (3.3), criar os do review (5.6), reorganizar os do job (4.5, 4.6) e padronizar as respostas de DELETE/PUT (4.9, 5.8).
+4. **Comunicação entre serviços:** fallback (4.3), 404 do Feign (4.4), N+1 (4.7), média na mensagem + DLQ + eventos no update/delete (3.4, 3.6, 5.3, 5.4).
+5. **Gateway:** `lb://` e Actuator fora do acesso público (6.1, 6.2).
+6. **Testes** (10.3) cobrindo o que foi feito acima. Se puder, comece os testes junto com o passo 1: cada bug corrigido ganha um teste que prova a correção.
+7. **Infra:** Flyway, segredos, Config Server em todos, ajustes de Docker e Kubernetes (10.4, 10.5, 7, 9).
+8. **Acabamento:** os itens 🟡 que sobrarem.
+
+---
+
+## Glossário
+
+| Termo | Explicação curta |
+|---|---|
+| **DTO** (Data Transfer Object) | Objeto que só carrega dados entre camadas ou sistemas. Define o formato do JSON da API, separado da tabela do banco |
+| **Entidade** | Classe com `@Entity` que representa uma tabela do banco |
+| **Record** | Tipo do Java para classes imutáveis que só guardam dados. Gera construtor, getters, `equals`, `hashCode` e `toString` automaticamente |
+| **Service discovery** | Mecanismo para um serviço encontrar o outro pelo nome, sem saber IP e porta (aqui, o Eureka) |
+| **Circuit breaker** | "Disjuntor": depois de várias falhas seguidas ao chamar um serviço, para de chamar por um tempo e usa um plano B (fallback) |
+| **Fallback** | O plano B executado quando a chamada falha ou o circuit breaker está aberto |
+| **DLQ** (Dead-Letter Queue) | Fila para onde vão as mensagens que falharam várias vezes, para análise posterior em vez de se perderem ou travarem a fila |
+| **N+1** | Fazer uma consulta para buscar uma lista e depois mais uma para cada item. 1 + N chamadas em vez de 1 ou 2 |
+| **Idempotente** | Operação que dá o mesmo resultado se repetida (PUT e DELETE são; POST não) |
+| **ProblemDetail** | Formato padrão (RFC 9457) para respostas de erro em APIs HTTP, com suporte nativo no Spring |
+| **`@Transactional`** | Faz um conjunto de operações no banco acontecer "tudo ou nada" |
+| **Transactional Outbox** | Padrão que grava o evento numa tabela junto com o dado, para garantir que nenhuma mensagem se perca |
+| **Probe** (Kubernetes) | Verificação periódica que o Kubernetes faz para saber se o container subiu (startup), está vivo (liveness) e pronto para receber tráfego (readiness) |
+| **ConfigMap / Secret** | Objetos do Kubernetes para guardar configuração. Secret é para dados sensíveis, como senhas |
