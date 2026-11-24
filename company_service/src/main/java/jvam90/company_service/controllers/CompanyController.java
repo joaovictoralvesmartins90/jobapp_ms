@@ -1,5 +1,6 @@
 package jvam90.company_service.controllers;
 
+import jvam90.company_service.exceptions.CompanyAlreadyExistsException;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.services.ICompanyService;
 import org.springframework.http.ResponseEntity;
@@ -33,7 +34,12 @@ public class CompanyController {
 
     @PostMapping()
     public ResponseEntity<Company> addCompany(@RequestBody Company company){
-        Company companyCreated = this.companyService.addCompany(company);
+        Company companyCreated = null;
+        try {
+            companyCreated = this.companyService.addCompany(company);
+        } catch (CompanyAlreadyExistsException e) {
+            throw new RuntimeException(e);
+        }
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{companyId}")
@@ -45,7 +51,7 @@ public class CompanyController {
     @DeleteMapping("/{companyId}")
     public ResponseEntity<String> deleteCompany(@PathVariable Long companyId){
         if(this.companyService.deleteCompany(companyId)){
-            return ResponseEntity.ok("Company deleted successfully");
+            return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
     }
@@ -53,7 +59,7 @@ public class CompanyController {
     @PutMapping("/{companyId}")
     public ResponseEntity<String> updateCompany(@RequestBody Company company, @PathVariable Long companyId){
         if(this.companyService.updateCompany(company, companyId)){
-            return ResponseEntity.ok("Company updated successfully");
+            return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
     }

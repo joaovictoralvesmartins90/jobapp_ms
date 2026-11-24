@@ -1,6 +1,7 @@
 package jvam90.company_service.services;
 
 import jvam90.company_service.clients.ReviewClient;
+import jvam90.company_service.exceptions.CompanyAlreadyExistsException;
 import jvam90.company_service.messaging.dto.ReviewMessage;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.repositories.CompanyRepository;
@@ -36,12 +37,13 @@ public class CompanyService implements ICompanyService{
     }
 
     @Override
-    public Company addCompany(Company company) {
+    public Company addCompany(Company company) throws CompanyAlreadyExistsException {
         if(!companyExists(company.getName())){
             companyRepository.save(company);
+            return company;
+        }else{
+            throw new CompanyAlreadyExistsException(company.getName());
         }
-
-        return company;
     }
 
     @Override
@@ -63,6 +65,7 @@ public class CompanyService implements ICompanyService{
         Company companyToUpdate = companyDb.get();
         companyToUpdate.setName(company.getName());
         companyToUpdate.setEmployees(company.getEmployees());
+        companyToUpdate.setDescription(company.getDescription());
         companyRepository.save(companyToUpdate);
         return true;
 
