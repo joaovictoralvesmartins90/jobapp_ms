@@ -18,11 +18,9 @@ import java.util.Optional;
 public class CompanyService implements ICompanyService{
 
     private final CompanyRepository companyRepository;
-    private final ReviewClient reviewClient;
 
     public CompanyService(CompanyRepository companyRepository, ReviewClient reviewClient) {
         this.companyRepository = companyRepository;
-        this.reviewClient = reviewClient;
     }
 
     @Override
@@ -80,8 +78,7 @@ public class CompanyService implements ICompanyService{
     public boolean updateCompanyRating(ReviewMessage reviewMessage) {
         Company company = companyRepository.findById(reviewMessage.getCompanyId()).orElse(null);
         if(company != null){
-            Double avgRating = reviewClient.getAverageRating(company.getId());
-            company.setAverageRating(avgRating);
+            company.setAverageRating(reviewMessage.getRating());
             companyRepository.save(company);
             return true;
         }

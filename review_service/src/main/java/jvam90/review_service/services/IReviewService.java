@@ -12,4 +12,5 @@ public interface IReviewService {
     Review addReview(Review review, Long companyId);
     boolean deleteReview(Long reviewId);
     boolean updateReview(Review review, Long reviewId);
+    double getAverageRating(Long companyId);
 }

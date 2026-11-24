@@ -63,9 +63,4 @@ public class ReviewController {
         return ResponseEntity.created(location).body(reviewCreated);
     }
 
-    @GetMapping("/averagerating")
-    public Double getAverageReview(@PathVariable Long companyId){
-        List<Review> reviewList = reviewService.findAll(companyId);
-        return reviewList.stream().mapToDouble(Review::getRating).average().orElse(0.0);
-    }
 }

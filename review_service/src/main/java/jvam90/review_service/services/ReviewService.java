@@ -56,4 +56,10 @@ public class ReviewService implements IReviewService{
         reviewRepository.save(reviewUpdate);
         return true;
     }
+
+    @Override
+    public double getAverageRating(Long companyId) {
+        List<Review> companyReviews = reviewRepository.findByCompanyId(companyId);
+        return companyReviews.stream().mapToDouble(Review::getRating).average().orElse(0.0);
+    }
 }
