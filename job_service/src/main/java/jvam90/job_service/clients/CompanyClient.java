@@ -1,6 +1,6 @@
 package jvam90.job_service.clients;
 
-import jvam90.job_service.dtos.CompanyDto;
+import jvam90.job_service.dtos.CompanyResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -8,5 +8,5 @@ import org.springframework.web.bind.annotation.PathVariable;
 @FeignClient(name = "company-service")
 public interface CompanyClient {
     @GetMapping("/companies/{companyId}")
-    CompanyDto getCompany(@PathVariable Long companyId);
+    CompanyResponse getCompany(@PathVariable Long companyId);
 }

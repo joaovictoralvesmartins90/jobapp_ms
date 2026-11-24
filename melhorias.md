@@ -1023,3 +1023,183 @@ E no review, remover o bean `companyRatingQueue()`: quem consome é o dono da fi
 2. Terminar o company: PUT com DTO e `@Valid`, DELETE/PUT lançando `CompanyNotFoundException`, limpeza do Feign e `@Transactional`.
 3. Escrever os primeiros testes do company (`@WebMvcTest`): POST válido → 201, POST inválido → 400, nome duplicado → 409, id inexistente → 404. Esses quatro testes teriam pego os bugs A e B.
 4. Seguir para o review_service, começando pelos 🔴 5.1, 5.2 e 5.3.
+
+---
+
+### Revisão de 24/11/2026 (2ª rodada): company_service e job_service
+
+Analisado o código atual da pasta de trabalho, incluindo as alterações **ainda não commitadas** do job_service (novos `JobRequest`, `JobResponse`, `CompanyResponse`, exceptions e `JobServiceGlobalExceptionHandler`).
+
+O job_service deu um salto grande: DTOs novos, `companyId` da URL sendo respeitado, exceções no lugar de `null`, 204 no DELETE/PUT e um advice com `ProblemDetail`. O company também avançou no DELETE e no PUT. 👏
+
+Como na rodada anterior, algumas mudanças trouxeram efeitos colaterais. Eles estão logo abaixo, com letras que continuam a lista anterior (A, B e C).
+
+#### ⚠️ Atenção primeiro: problemas que precisam de correção
+
+##### 🆕🔴 D. job: vagas criadas pelo POST ficam sem empresa
+
+**O que acontece:** antes, o `addJob` fazia `createJobDto.setCompanyId(companyId)` com o id da URL. Na refatoração essa linha saiu, e agora o `JobMapper.mapFromRequest` copia `jobRequest.companyId()`, ou seja, o valor **do corpo da requisição**. Na prática:
+
+- Se o cliente não manda `companyId` no JSON (o normal, já que ele está na URL), a vaga é salva com `companyId = null` e nunca aparece em `GET /companies/{id}/jobs`.
+- Se o cliente manda outro id, a vaga é criada numa empresa diferente da que foi validada na URL.
+
+**Como corrigir:** tirar `companyId` do `JobRequest` (o item 4.5 já sugeria isso) e passar o id da URL para o mapper:
+
+```java
+public record JobRequest(String title, String description, String minSalary,
+                         String maxSalary, String location) {}
+```
+
+```java
+// JobMapper
+public static Job mapFromRequest(JobRequest request, Long companyId) {
+    Job job = new Job();
+    ...
+    job.setCompanyId(companyId);   // sempre o da URL
+    return job;
+}
+```
+
+##### 🆕🔴 E. job: todo 404 vira 500 (o mesmo erro do bug B)
+
+**O que acontece:** `JobNotFoundException(String id)` e `CompanyNotFoundException(String id)` usam `"%d".formatted(id)`. É exatamente o bug **B** que foi corrigido no company: `%d` com uma `String` lança `IllegalFormatConversionException` dentro do construtor. Então `GET /companies/1/jobs/999` responde 500, e não 404.
+
+**Como corrigir:** fazer igual ao company, recebendo `Long`:
+
+```java
+public JobNotFoundException(Long id) {
+    super("Job with id %d not found.".formatted(id));
+}
+```
+
+E no service, `new JobNotFoundException(jobId)`, sem `toString()`.
+
+##### 🆕🔴 F. job: o circuit breaker foi removido
+
+**O que acontece:** o `@CircuitBreaker(name = "companyBreaker", ...)` e o método de fallback saíram do `JobService` (a configuração `resilience4j.*` continua no `application.properties`, mas sem uso). Agora, se o company-service estiver fora, `GET` (lista e por id) e `POST` de vagas respondem 500.
+
+O item 4.3 apontava que o fallback **devolvia dado errado** (lista vazia). A correção era melhorar o fallback, e não remover a proteção. O circuit breaker estava na lista de pontos fortes do projeto (seção 1).
+
+**Como corrigir:** trazer a anotação de volta com um fallback que devolve as vagas sem os dados da empresa, como no item 4.3. Uma forma organizada é isolar a chamada ao company num componente próprio, assim todos os métodos ficam protegidos:
+
+```java
+@Component
+public class CompanyGateway {
+    private final CompanyClient companyClient;
+    // construtor...
+
+    @CircuitBreaker(name = "companyBreaker", fallbackMethod = "fallback")
+    public CompanyResponse getCompany(Long companyId) {
+        return companyClient.getCompany(companyId);
+    }
+
+    private CompanyResponse fallback(Long companyId, Throwable ex) {
+        if (ex instanceof FeignException.NotFound) {
+            throw new CompanyNotFoundException(companyId);  // empresa não existe: 404
+        }
+        return null;  // company fora do ar: vaga sem os dados da empresa
+    }
+}
+```
+
+Atenção ao `FeignException.NotFound` dentro do fallback: um 404 do company significa "a empresa não existe", e não "o serviço caiu". Por isso ele não deve ser tratado como indisponibilidade. Também vale configurar `resilience4j.circuitbreaker.instances.companyBreaker.ignore-exceptions=feign.FeignException$NotFound`, para que os 404 não contem como falha e não abram o circuito.
+
+##### 🆕🔴 G. job: o id da empresa sempre chega `null`
+
+**O que acontece:** o novo `CompanyResponse` do job tem os campos `companyId` e `name`. Mas o company-service devolve o JSON com o campo **`id`**, e não `companyId`. O Jackson associa os campos pelo nome; como `companyId` não existe no JSON, ele fica sempre `null`.
+
+**Como corrigir:** usar os mesmos nomes do contrato do company:
+
+```java
+public record CompanyResponse(Long id, String name, Double averageRating) {}
+```
+
+> 💡 Este é o tipo de problema que os **testes de contrato** do item 10.3 existem para pegar: dois serviços que compilam e sobem normalmente, mas não "conversam" direito.
+
+##### 🆕🔴 H. company: o PUT recusa a empresa manter o próprio nome
+
+**O que acontece:** em `updateCompany`, a checagem de nome duplicado usa `companyExists(companyRequest.name())`, que procura em **todas** as empresas, inclusive a que está sendo editada. Assim, um PUT que muda só o número de funcionários e mantém o nome recebe **409 Conflict**: a empresa "conflita" consigo mesma.
+
+**Como corrigir:** ignorar a própria empresa na busca:
+
+```java
+// CompanyRepository
+boolean existsByNameIgnoreCaseAndIdNot(String name, Long id);
+```
+
+```java
+if (companyRepository.existsByNameIgnoreCaseAndIdNot(companyRequest.name(), companyId)) {
+    throw new CompanyAlreadyExistsException(companyRequest.name());
+}
+```
+
+#### Os bugs da rodada anterior
+
+| Bug | Status | Observação |
+|---|---|---|
+| **A.** `@NotBlank` em `Integer` derruba todo POST | ⏳ Pendente | `CompanyRequest.employees` continua com `@NotBlank`. Trocar por `@NotNull` |
+| **B.** `%d` com `String` em `CompanyNotFoundException` | ✅ Resolvido | O construtor agora recebe `Long` (mas o mesmo erro apareceu no job, ver **E**) |
+| **C.** Listener escuta a fila antiga, sem DLQ | ⏳ Pendente | O `@RabbitListener` ainda usa `"companyRatingQueue"` |
+
+#### Status de cada item
+
+**company_service**
+
+| Item | Status | O que foi feito / o que falta |
+|---|---|---|
+| 3.1 Empresa duplicada vira 500 | ✅ Resolvido | Import sem uso no controller removido ✅. Sobram: o `throws CompanyAlreadyExistsException` em `ICompanyService`/`CompanyService` (desnecessário em `RuntimeException`) e o `@Column(unique = true)` no `name` |
+| 3.2 Validação não funciona | 🟡 Parcial | Bug **A** pendente |
+| 3.3 Entidade exposta na API | 🟡 Quase lá | O PUT agora recebe `CompanyRequest` ✅. Falta o `@Valid` no PUT: sem ele, um PUT com `name` vazio passa pela validação e só estoura no banco |
+| 3.4 Company chama o review de volta | ✅ Resolvido | Limpeza pendente: `ReviewClient`, o parâmetro `ReviewClient reviewClient` no construtor do `CompanyService`, `@EnableFeignClients` e a dependência do OpenFeign |
+| 3.5 Service conhece o formato da mensagem | 🟡 Parcial | `updateCompanyRating` ainda recebe `ReviewMessage` |
+| 3.6 Configuração do RabbitMQ | 🟡 Parcial | Bug **C** pendente |
+| 3.7 Paginação | ⏳ Pendente | |
+| 3.8 `ResponseEntity` no DELETE/PUT | ✅ Resolvido | Agora é `ResponseEntity<Void>` |
+| 3.8 Retornos `boolean` para "não encontrado" | ✅ Resolvido | `deleteCompany` e `updateCompany` são `void` e lançam `CompanyNotFoundException` |
+| 3.8 `@Transactional` | 🟡 Parcial | Presente no delete e no update ✅, e o update já aproveita o *dirty checking* (sem `save`) ✅. Falta no `addCompany` e nas leituras (`@Transactional(readOnly = true)` em `findAll` e `findCompanyById`) |
+| 3.8 `findById` + `isEmpty()` + `get()` | 🟡 Parcial | Resolvido no `findCompanyById`. Delete e update ainda usam o padrão verboso; dá para trocar por `findById(id).orElseThrow(() -> new CompanyNotFoundException(id))`. `updateCompanyRating` ainda usa `orElse(null)` |
+| 3.8 Demais itens (`existsByNameIgnoreCase`, `companyExists` público, `@GetMapping()`, `this.`, `ReviewMessage` como record) | ⏳ Pendente | |
+| 🆕 Imports sem uso | 🟡 Novo detalhe | `ICompanyService`: `Company`, `Optional` e `CompanyAlreadyExistsException`. `ReviewMessageConsumer`: `CompanyService`. A IDE remove todos de uma vez (IntelliJ: *Ctrl+Alt+O*) |
+
+**job_service**
+
+| Item | Status | O que foi feito / o que falta |
+|---|---|---|
+| 4.1 `companyId` da URL ignorado | ✅ Resolvido | GET por id, PUT e DELETE agora conferem a empresa. Sugestão: trocar o `findById(...).stream().filter(...)` por `Optional<Job> findByIdAndCompanyId(Long id, Long companyId)` no repository. Fica mais curto, e o banco faz o filtro. O filtro atual também lança `NullPointerException` em vagas antigas com `companyId = null` (`j.getCompanyId().equals(...)`) |
+| 4.2 PUT troca a vaga de empresa | ✅ Resolvido | O update não altera mais o `companyId`. Mas o campo continua no `JobRequest` e causa o bug **D** no POST |
+| 4.3 Fallback devolve lista vazia | ⚠️ Regrediu | O circuit breaker foi removido em vez de corrigido (bug **F**) |
+| 4.4 Empresa inexistente vira 500 | 🟡 Parcial | O `addJob` agora tenta checar a empresa ✅, mas o `if (companyResponse == null)` nunca é verdadeiro: quando o company responde 404, o Feign **lança** `FeignException.NotFound` em vez de devolver `null`. O resultado continua sendo 500. Tratar o `FeignException.NotFound` (no `CompanyGateway` do bug **F**, ou no advice) |
+| 4.5 DTOs confusos | 🟡 Parcial | `JobRequest` e `JobResponse` como `record`, usados em todos os endpoints ✅; os DTOs antigos foram apagados ✅. Falta: tirar `companyId` do `JobRequest` (bug **D**), colocar as anotações de validação e corrigir o `CompanyResponse` (bug **G**) |
+| 4.6 Nomes de classe no JSON | 🟡 Parcial | O formato `{"jobDto":…, "companyDto":…}` acabou ✅. Mas o campo `companyResponse` do `JobResponse` aparece assim no JSON. Renomear para `company` |
+| 4.7 N+1 no `findAll` | ⏳ Pendente | O loop ainda chama o company uma vez por vaga |
+| 4.8 Salário como `String` | ⏳ Pendente | |
+| 4.9 DELETE/PUT com texto | ✅ Resolvido | 204 sem corpo, e o erro de digitação "succesfully" sumiu junto |
+| 4.10 `@Autowired RestTemplate` sem uso | 🟡 Parcial | O campo saiu do `JobService` ✅. A classe `AppConfig`, que cria o `RestTemplate`, continua e pode ser apagada |
+| 4.10 `companyClient` não é `final` | ✅ Resolvido | |
+| 4.10 Services devolvendo `null` | ✅ Resolvido | Os métodos públicos lançam exceção. O `getJob` privado ainda devolve `null`, o que é aceitável, mas um `Optional` deixaria tudo uniforme |
+| 4.10 `addJob` alterando o DTO recebido | ✅ Resolvido | Mas veja o bug **D**: a linha saiu sem que o id da URL fosse passado de outro jeito |
+| 4.10 Controller chamando o mapper | ✅ Resolvido | |
+| 4.10 Mapeamento feito dentro do service | 🟡 Parcial | O `addJob` usa o mapper ✅. `findAll` e `findJobById` ainda montam o `JobResponse` na mão, repetindo o que `JobMapper.mapFromClass` já faz |
+| 4.10 `JobMapper` `@Component` com `static` | ⏳ Pendente | O `JobMapper` também tem um import de `CompanyClient` sem uso |
+| 4.10 `new ResponseEntity<>(…, HttpStatus.OK)` | ⏳ Pendente | No `findAll` do controller |
+| 4.10 `Job.companyId` sem `nullable = false` | ⏳ Pendente | Com essa restrição, o bug **D** teria estourado na hora em vez de gravar vagas órfãs em silêncio |
+| 4.10 Propriedades duplicadas, `show-details=ALWAYS`, timeout do Feign | ⏳ Pendente | |
+| 🆕 Validação no job | 🟠 Novo | O pom recebeu `jakarta.validation-api`, o mesmo engano do item 3.2: só as anotações, sem o validador. O `@Valid` do POST não faz nada, e o `JobRequest` ainda não tem anotações. Trocar por `spring-boot-starter-validation`, anotar o record e colocar `@Valid` também no PUT |
+| 🆕 Import sem uso | 🟡 Novo detalhe | `IJobService` importa `Job` |
+
+**Pontos gerais**
+
+| Item | Status | Observação |
+|---|---|---|
+| 10.1 Bean Validation | 🟡 Parcial | Company: falta corrigir o bug **A** e colocar `@Valid` no PUT. Job: ver "Validação no job" acima |
+| 10.2 `@RestControllerAdvice` com `ProblemDetail` | 🟡 Parcial | Company ✅ e agora também o job ✅ (`JobServiceGlobalExceptionHandler`). Falta tratar `FeignException.NotFound` no job e criar o advice no review |
+| 10.3 Testes | ⏳ Pendente | Os bugs **D**, **E**, **G** e **H** seriam pegos por testes simples |
+
+#### Próximos passos sugeridos
+
+1. **Bugs que quebram o fluxo principal:** **A** (POST de empresa), **D** (vaga sem empresa), **E** (404 do job) e **H** (PUT de empresa). Cada um é uma ou duas linhas.
+2. **Comunicação job → company:** bugs **F** e **G** e item 4.4, de preferência juntos, com o `CompanyGateway`.
+3. **Mensageria:** bug **C**.
+4. **Validação no job:** starter + anotações no `JobRequest` + `@Valid` no PUT (e no PUT do company).
+5. **Testes de controller** (`@WebMvcTest`) para company e job, cobrindo 201, 204, 400, 404 e 409. Eles protegem as próximas refatorações desse tipo de efeito colateral.
+6. Depois disso: N+1 (4.7), salário em `BigDecimal` (4.8) e a limpeza dos itens 🟡.

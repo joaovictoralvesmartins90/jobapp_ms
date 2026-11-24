@@ -1,32 +1,35 @@
 package jvam90.job_service.util;
 
-import jvam90.job_service.dtos.CreateJobDto;
+import jvam90.job_service.clients.CompanyClient;
+import jvam90.job_service.dtos.CompanyResponse;
+import jvam90.job_service.dtos.JobRequest;
+import jvam90.job_service.dtos.JobResponse;
 import jvam90.job_service.models.Job;
 import org.springframework.stereotype.Component;
 
 @Component
 public class JobMapper {
-    public static Job mapFromDto(CreateJobDto createJobDto){
+
+    public static Job mapFromRequest(JobRequest jobRequest){
         Job mappedJob = new Job();
-        mappedJob.setDescription(createJobDto.getDescription());
-        mappedJob.setLocation(createJobDto.getLocation());
-        mappedJob.setTitle(createJobDto.getTitle());
-        mappedJob.setMinSalary(createJobDto.getMinSalary());
-        mappedJob.setMaxSalary(createJobDto.getMaxSalary());
-        mappedJob.setCompanyId(createJobDto.getCompanyId());
+        mappedJob.setDescription(jobRequest.description());
+        mappedJob.setLocation(jobRequest.location());
+        mappedJob.setTitle(jobRequest.title());
+        mappedJob.setMinSalary(jobRequest.minSalary());
+        mappedJob.setMaxSalary(jobRequest.maxSalary());
+        mappedJob.setCompanyId(jobRequest.companyId());
         return mappedJob;
     }
 
-    public static CreateJobDto mapFromClass(Job job){
-        CreateJobDto mappedJob = new CreateJobDto();
-        mappedJob.setId(job.getId());
-        mappedJob.setDescription(job.getDescription());
-        mappedJob.setLocation(job.getLocation());
-        mappedJob.setTitle(job.getTitle());
-        mappedJob.setMinSalary(job.getMinSalary());
-        mappedJob.setMaxSalary(job.getMaxSalary());
-        mappedJob.setCompanyId(job.getCompanyId());
-        return mappedJob;
+    public static JobResponse mapFromClass(Job job, CompanyResponse companyResponse){
+        JobResponse jobResponse = new JobResponse(job.getId(),
+                job.getTitle(),
+                job.getDescription(),
+                job.getMinSalary(),
+                job.getMaxSalary(),
+                job.getLocation(),
+                companyResponse);
+        return jobResponse;
     }
 
 }

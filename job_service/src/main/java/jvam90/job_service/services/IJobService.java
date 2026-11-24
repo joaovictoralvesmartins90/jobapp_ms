@@ -1,16 +1,15 @@
 package jvam90.job_service.services;
 
-import jvam90.job_service.dtos.CreateJobDto;
-import jvam90.job_service.dtos.JobWithCompanyDto;
+import jvam90.job_service.dtos.JobRequest;
+import jvam90.job_service.dtos.JobResponse;
 import jvam90.job_service.models.Job;
 
 import java.util.List;
-import java.util.Optional;
 
 public interface IJobService {
-    List<JobWithCompanyDto> findAll(Long companyId);
-    JobWithCompanyDto findJobById(Long jobId);
-    Job addJob(CreateJobDto job, Long companyId);
-    boolean deleteJob(Long id);
-    boolean updateJob(Job job, Long jobId);
+    List<JobResponse> findAll(Long companyId);
+    JobResponse findJobById(Long companyId, Long jobId);
+    JobResponse addJob(JobRequest job, Long companyId);
+    void deleteJob(Long companyId, Long id);
+    void updateJob(JobRequest job, Long companyId, Long jobId);
 }

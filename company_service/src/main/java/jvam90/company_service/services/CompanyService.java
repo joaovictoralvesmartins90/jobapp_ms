@@ -10,6 +10,7 @@ import jvam90.company_service.messaging.dto.ReviewMessage;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.repositories.CompanyRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -35,7 +36,7 @@ public class CompanyService implements ICompanyService{
 
     @Override
     public CompanyResponse findCompanyById(Long id) {
-        return companyRepository.findById(id).map(CompanyMapper::mapFromEntity).orElseThrow(() -> new CompanyNotFoundException(id.toString()));
+        return companyRepository.findById(id).map(CompanyMapper::mapFromEntity).orElseThrow(() -> new CompanyNotFoundException(id));
     }
 
     @Override
@@ -50,38 +51,37 @@ public class CompanyService implements ICompanyService{
     }
 
     @Override
-    public boolean deleteCompany(Long id) {
-        Optional<Company> companyDb = companyRepository.findById(id);
+    @Transactional
+    public void deleteCompany(Long companyId) {
+        Optional<Company> companyDb = companyRepository.findById(companyId);
         if(companyDb.isEmpty()){
-            return false;
+            throw new CompanyNotFoundException(companyId);
         }
         companyRepository.delete(companyDb.get());
-        return true;
     }
 
     @Override
-    public boolean updateCompany(Company company, Long id) {
-        Optional<Company> companyDb = companyRepository.findById(id);
+    @Transactional
+    public void updateCompany(CompanyRequest companyRequest, Long companyId) {
+        Optional<Company> companyDb = companyRepository.findById(companyId);
         if(companyDb.isEmpty()){
-            return false;
+            throw new CompanyNotFoundException(companyId);
+        }
+        if(companyExists(companyRequest.name())){
+            throw new CompanyAlreadyExistsException(companyRequest.name());
         }
         Company companyToUpdate = companyDb.get();
-        companyToUpdate.setName(company.getName());
-        companyToUpdate.setEmployees(company.getEmployees());
-        companyToUpdate.setDescription(company.getDescription());
-        companyRepository.save(companyToUpdate);
-        return true;
-
+        companyToUpdate.setName(companyRequest.name());
+        companyToUpdate.setEmployees(companyRequest.employees());
+        companyToUpdate.setDescription(companyRequest.description());
     }
 
     @Override
-    public boolean updateCompanyRating(ReviewMessage reviewMessage) {
+    public void updateCompanyRating(ReviewMessage reviewMessage) {
         Company company = companyRepository.findById(reviewMessage.getCompanyId()).orElse(null);
         if(company != null){
             company.setAverageRating(reviewMessage.getRating());
             companyRepository.save(company);
-            return true;
         }
-        return false;
     }
 }

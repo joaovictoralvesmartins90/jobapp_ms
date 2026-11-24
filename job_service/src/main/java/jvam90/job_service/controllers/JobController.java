@@ -1,10 +1,9 @@
 package jvam90.job_service.controllers;
 
-import jvam90.job_service.dtos.CreateJobDto;
-import jvam90.job_service.dtos.JobWithCompanyDto;
-import jvam90.job_service.models.Job;
+import jakarta.validation.Valid;
+import jvam90.job_service.dtos.JobRequest;
+import jvam90.job_service.dtos.JobResponse;
 import jvam90.job_service.services.IJobService;
-import jvam90.job_service.util.JobMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -24,45 +23,36 @@ public class JobController {
     }
 
     @GetMapping()
-    public ResponseEntity<List<JobWithCompanyDto>> findAll(@PathVariable Long companyId){
+    public ResponseEntity<List<JobResponse>> findAll(@PathVariable Long companyId){
         return new ResponseEntity<>(this.jobService.findAll(companyId), HttpStatus.OK) ;
     }
 
     @GetMapping("/{jobId}")
-    public ResponseEntity<JobWithCompanyDto> findJobById(@PathVariable Long companyId, @PathVariable Long jobId){
-        JobWithCompanyDto jobWithCompanyDto = this.jobService.findJobById(jobId);
-        if(jobWithCompanyDto == null){
-            return ResponseEntity.notFound().build();
-        }
-        return ResponseEntity.ok(jobWithCompanyDto);
+    public ResponseEntity<JobResponse> findJobById(@PathVariable Long companyId, @PathVariable Long jobId){
+        return ResponseEntity.ok(jobService.findJobById(companyId, jobId));
     }
 
     @PostMapping()
-    public ResponseEntity<CreateJobDto> addJob(@RequestBody CreateJobDto createJobDto, @PathVariable Long companyId){
-        Job jobCreated = this.jobService.addJob(createJobDto, companyId);
-        CreateJobDto mappedDto = JobMapper.mapFromClass(jobCreated);
+    public ResponseEntity<JobResponse> addJob(@RequestBody @Valid JobRequest jobRequest, @PathVariable Long companyId){
+        JobResponse jobCreated = this.jobService.addJob(jobRequest, companyId);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{id}")
-                .buildAndExpand(jobCreated.getId())
+                .buildAndExpand(jobCreated.id())
                 .toUri();
-        return ResponseEntity.created(location).body(mappedDto);
+        return ResponseEntity.created(location).body(jobCreated);
     }
 
     @DeleteMapping("/{jobId}")
-    public ResponseEntity<String> deleteJob(@PathVariable Long companyId, @PathVariable Long jobId){
-        if(this.jobService.deleteJob(jobId)){
-            return ResponseEntity.ok("Job deleted succesfully");
-        }
-        return ResponseEntity.notFound().build();
+    public ResponseEntity<Void> deleteJob(@PathVariable Long companyId, @PathVariable Long jobId){
+        jobService.deleteJob(companyId, jobId);
+        return ResponseEntity.noContent().build();
     }
 
     @PutMapping("/{jobId}")
-    public ResponseEntity<String> updateJob(@RequestBody Job job, @PathVariable Long companyId, @PathVariable Long jobId){
-        if(this.jobService.updateJob(job, jobId)){
-            return ResponseEntity.ok("Job updated succesfully");
-        }
-        return ResponseEntity.notFound().build();
+    public ResponseEntity<Void> updateJob(@RequestBody JobRequest jobRequest, @PathVariable Long companyId, @PathVariable Long jobId){
+        jobService.updateJob(jobRequest, companyId, jobId);
+        return ResponseEntity.noContent().build();
     }
 
 }

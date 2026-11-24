@@ -1,32 +1,23 @@
 package jvam90.job_service.services;
 
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import jvam90.job_service.clients.CompanyClient;
-import jvam90.job_service.dtos.CompanyDto;
-import jvam90.job_service.dtos.CreateJobDto;
-import jvam90.job_service.dtos.JobDto;
-import jvam90.job_service.dtos.JobWithCompanyDto;
+import jvam90.job_service.dtos.*;
+import jvam90.job_service.exceptions.CompanyNotFoundException;
+import jvam90.job_service.exceptions.JobNotFoundException;
 import jvam90.job_service.models.Job;
 import jvam90.job_service.repositories.JobRepository;
 import jvam90.job_service.util.JobMapper;
-import org.jspecify.annotations.NonNull;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 @Service
 public class JobService implements IJobService {
 
     private final JobRepository jobRepository;
-
-    @Autowired
-    RestTemplate restTemplate;
-
-    private CompanyClient companyClient;
+    private final CompanyClient companyClient;
 
     public JobService(JobRepository jobRepository, CompanyClient companyClient) {
         this.jobRepository = jobRepository;
@@ -34,83 +25,69 @@ public class JobService implements IJobService {
     }
 
     @Override
-    @CircuitBreaker(name = "companyBreaker", fallbackMethod = "companyBreakerFallback")
-    public List<JobWithCompanyDto> findAll(Long companyId) {
+    public List<JobResponse> findAll(Long companyId) {
         List<Job> jobs = jobRepository.findByCompanyId(companyId);
-        List<JobWithCompanyDto> jobWithCompanyDtos = new ArrayList<>();
+        List<JobResponse> jobResponses = new ArrayList<>();
 
         for(Job job : jobs){
-            CompanyDto companyDto = companyClient.getCompany(job.getCompanyId());
-            JobWithCompanyDto jobWithCompanyDto = getJobWithCompanyDto(job, companyDto);
-            jobWithCompanyDtos.add(jobWithCompanyDto);
+            CompanyResponse companyResponse = companyClient.getCompany(job.getCompanyId());
+            JobResponse jobWithCompanyResponse = new JobResponse(job.getId(), job.getTitle(), job.getDescription(),
+                    job.getMinSalary(), job.getMaxSalary(), job.getLocation(), companyResponse);
+            jobResponses.add(jobWithCompanyResponse);
         }
-        return jobWithCompanyDtos;
-    }
-
-    // Mesmos parâmetros de findAll + a exceção no final; mesmo tipo de retorno
-    public List<JobWithCompanyDto> companyBreakerFallback(Long companyId, Throwable ex) {
-        return new ArrayList<>();
-    }
-
-    private static @NonNull JobWithCompanyDto getJobWithCompanyDto(Job job, CompanyDto companyDto) {
-        JobDto jobDto = new JobDto();
-        jobDto.setId(job.getId());
-        jobDto.setTitle(job.getTitle());
-        jobDto.setDescription(job.getDescription());
-        jobDto.setLocation(job.getLocation());
-        jobDto.setMinSalary(job.getMinSalary());
-        jobDto.setMaxSalary(job.getMaxSalary());
-        jobDto.setCompanyId(job.getCompanyId());
-        JobWithCompanyDto jobWithCompanyDto = new JobWithCompanyDto();
-        jobWithCompanyDto.setCompanyDto(companyDto);
-        jobWithCompanyDto.setJobDto(jobDto);
-        return jobWithCompanyDto;
+        return jobResponses;
     }
 
     @Override
-    public JobWithCompanyDto findJobById(Long jobId) {
-        Job jobFromDb = jobRepository.findById(jobId)
+    public JobResponse findJobById(Long companyId, Long jobId) {
+        Job job = jobRepository.findById(jobId)
                 .stream()
-                .filter(job -> job.getId().equals(jobId))
+                .filter(j -> j.getId().equals(jobId) && j.getCompanyId().equals(companyId))
                 .findFirst().orElse(null);
-        if(jobFromDb == null){
-            return null;
+        if(job == null){
+            throw new JobNotFoundException(jobId.toString());
         }
-        CompanyDto companyDto = companyClient.getCompany(jobFromDb.getCompanyId());
-        return getJobWithCompanyDto(jobFromDb, companyDto);
+        CompanyResponse companyResponse = companyClient.getCompany(job.getCompanyId());
+        return new JobResponse(job.getId(), job.getTitle(), job.getDescription(),
+                job.getMinSalary(), job.getMaxSalary(), job.getLocation(), companyResponse);
     }
 
     @Override
-    public Job addJob(CreateJobDto createJobDto, Long companyId) {
-        createJobDto.setCompanyId(companyId);
-        Job mappedJob = JobMapper.mapFromDto(createJobDto);
-        return jobRepository.save(mappedJob);
+    public JobResponse addJob(JobRequest createJobDto, Long companyId) {
+        CompanyResponse companyResponse = companyClient.getCompany(companyId);
+        if(companyResponse == null){
+            throw new CompanyNotFoundException(companyId.toString());
+        }
+        Job mappedJob = JobMapper.mapFromRequest(createJobDto);
+        jobRepository.save(mappedJob);
+        return JobMapper.mapFromClass(mappedJob, companyResponse);
     }
 
     @Override
-    public boolean deleteJob(Long jobId) {
-        Job job = getJob(jobId);
-        if (job == null) return false;
+    @Transactional
+    public void deleteJob(Long companyId, Long jobId) {
+        Job job = getJob(companyId, jobId);
+        if (job == null) throw new JobNotFoundException(jobId.toString());
         this.jobRepository.delete(job);
-        return true;
     }
 
-    private Job getJob(Long jobId) {
-        Optional<Job> job = this.jobRepository.findById(jobId);
-        return job.orElse(null);
+    private Job getJob(Long companyId, Long jobId) {
+        return this.jobRepository.findById(jobId)
+                .stream()
+                .filter(j -> j.getCompanyId().equals(companyId) && j.getId().equals(jobId))
+                .findFirst()
+                .orElse(null);
     }
 
     @Override
-    public boolean updateJob(Job job, Long jobId) {
-        Job jobDb = getJob(jobId);
-        if (jobDb == null) return false;
-        jobDb.setTitle(job.getTitle());
-        jobDb.setDescription(job.getDescription());
-        jobDb.setMinSalary(job.getMinSalary());
-        jobDb.setMaxSalary(job.getMaxSalary());
-        jobDb.setLocation(job.getLocation());
-        jobDb.setCompanyId(job.getCompanyId());
-        jobRepository.save(jobDb);
-        return true;
+    @Transactional
+    public void updateJob(JobRequest jobRequest, Long companyId, Long jobId) {
+        Job jobDb = getJob(companyId, jobId);
+        if (jobDb == null) throw new JobNotFoundException(jobId.toString());
+        jobDb.setTitle(jobRequest.title());
+        jobDb.setDescription(jobRequest.description());
+        jobDb.setMinSalary(jobRequest.minSalary());
+        jobDb.setMaxSalary(jobRequest.maxSalary());
+        jobDb.setLocation(jobRequest.location());
     }
 }

@@ -15,7 +15,7 @@ public interface ICompanyService {
     List<CompanyResponse> findAll();
     CompanyResponse findCompanyById(Long id);
     CompanyResponse addCompany(CompanyRequest company) throws CompanyAlreadyExistsException;
-    boolean deleteCompany(Long id);
-    boolean updateCompany(Company company, Long id);
-    boolean updateCompanyRating(ReviewMessage reviewMessage);
+    void deleteCompany(Long id);
+    void updateCompany(CompanyRequest companyRequest, Long id);
+    void updateCompanyRating(ReviewMessage reviewMessage);
 }
