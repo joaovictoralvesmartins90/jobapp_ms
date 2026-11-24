@@ -35,6 +35,7 @@ Os itens têm uma cor que indica a prioridade:
 10. [Pontos que valem para todos os serviços](#10-pontos-que-valem-para-todos-os-serviços)
 11. [Ordem sugerida](#11-ordem-sugerida)
 12. [Glossário](#glossário)
+13. [Acompanhamento das correções](#13-acompanhamento-das-correções)
 
 ---
 
@@ -895,3 +896,130 @@ Não precisa fazer tudo de uma vez. Uma sequência que funciona bem:
 | **Transactional Outbox** | Padrão que grava o evento numa tabela junto com o dado, para garantir que nenhuma mensagem se perca |
 | **Probe** (Kubernetes) | Verificação periódica que o Kubernetes faz para saber se o container subiu (startup), está vivo (liveness) e pronto para receber tráfego (readiness) |
 | **ConfigMap / Secret** | Objetos do Kubernetes para guardar configuração. Secret é para dados sensíveis, como senhas |
+
+---
+
+## 13. Acompanhamento das correções
+
+Esta seção registra como cada item do guia evoluiu. O texto original dos itens acima foi mantido; aqui fica só o status de cada um.
+
+Legenda: ✅ **Resolvido** · 🟡 **Parcial** (começou, mas falta algo) · ⏳ **Pendente** (ainda não mexido) · 🆕 **Problema novo** (surgiu durante uma correção)
+
+### Revisão de 24/11/2026: após "Ajustes company_service parte 2 e parte 3"
+
+Commits analisados: `9fddff6` (DTOs e exceptions) e `a478d9e` (RabbitMQ, média calculada na mensagem).
+
+#### ⚠️ Atenção primeiro: três bugs que surgiram nas correções
+
+São normais em refatoração e fáceis de corrigir, mas têm prioridade sobre todo o resto, porque hoje **quebram o POST, o 404 e a mensageria**.
+
+##### 🆕🔴 A. Todo `POST /companies` agora dá erro 500
+
+**O que acontece:** o `spring-boot-starter-validation` entrou no pom (ótimo!), então as anotações de validação passaram a ser executadas. Mas `CompanyRequest` ainda tem `@NotBlank` no campo `employees`, que é `Integer`. O validador não sabe aplicar `@NotBlank` a um número e lança `UnexpectedTypeException` em **toda** requisição de criação, mesmo nas válidas.
+
+**Como corrigir:** trocar por `@NotNull`, como descrito no item 3.2:
+
+```java
+@NotNull @PositiveOrZero Integer employees,
+```
+
+##### 🆕🔴 B. Empresa inexistente dá 500 em vez de 404
+
+**O que acontece:** em `CompanyNotFoundException`:
+
+```java
+public CompanyNotFoundException(String id) {
+    super("Company with id %d not found".formatted(id));   // %d com uma String
+}
+```
+
+O `%d` só aceita números inteiros, mas `id` é `String`. O `formatted` lança `IllegalFormatConversionException` *dentro do construtor da exceção*. Ou seja: na hora de avisar "não encontrei", o código quebra, e o cliente recebe 500. O `@RestControllerAdvice` nem chega a ser acionado.
+
+**Como corrigir:** receber o id como `Long`, que é o tipo real dele, e manter o `%d`:
+
+```java
+public CompanyNotFoundException(Long id) {
+    super("Company with id %d not found".formatted(id));
+}
+```
+
+No service, fica `orElseThrow(() -> new CompanyNotFoundException(id))`, sem o `toString()`.
+
+> 💡 Dica: esse tipo de erro só aparece quando o código roda. Um teste com `@WebMvcTest` chamando `GET /companies/999` e esperando 404 pegaria na hora (item 10.3).
+
+##### 🆕🔴 C. A fila com DLQ foi criada, mas ninguém usa
+
+**O que acontece:**
+
+- O company declara a fila `company.rating.queue` (com DLQ), lendo o nome da propriedade `app.messaging.rating-queue`. 👍
+- Mas o `@RabbitListener` continua escutando `"companyRatingQueue"`, o nome antigo, escrito à mão.
+- E o review continua declarando e enviando para `"companyRatingQueue"`.
+
+Resultado: a fila nova e a DLQ ficam vazias para sempre, e as mensagens passam pela fila antiga, que **não tem DLQ**. Pior: como `default-requeue-rejected=false` foi configurado, depois das 3 tentativas a mensagem com erro é **descartada**, sem ir para lugar nenhum.
+
+**Como corrigir:** usar o mesmo nome, vindo da propriedade, nos dois serviços:
+
+```java
+// company_service: ReviewMessageConsumer
+@RabbitListener(queues = "${app.messaging.rating-queue}")
+```
+
+```properties
+# review_service: application.properties
+app.messaging.rating-queue=company.rating.queue
+```
+
+```java
+// review_service: ReviewMessageProducer
+public ReviewMessageProducer(RabbitTemplate rabbitTemplate,
+                             @Value("${app.messaging.rating-queue}") String queue, ...) { ... }
+
+rabbitTemplate.convertAndSend(queue, reviewMessage);
+```
+
+E no review, remover o bean `companyRatingQueue()`: quem consome é o dono da fila e já a declara com a DLQ. Se a fila antiga `companyRatingQueue` ficou criada no RabbitMQ, dá para apagá-la pelo painel (http://localhost:15672).
+
+#### Status de cada item
+
+**company_service**
+
+| Item | Status | O que foi feito / o que falta |
+|---|---|---|
+| 3.1 Empresa duplicada vira 500 | ✅ Resolvido | A exceção agora é `RuntimeException`, o `try/catch` saiu do controller e o advice devolve **409**. Detalhes que sobraram: o `throws CompanyAlreadyExistsException` em `ICompanyService`/`CompanyService` não é mais necessário; o import da exceção no controller não é usado; falta o `@Column(unique = true)` no `name` |
+| 3.2 Validação não funciona | 🟡 Parcial | Starter adicionado e `@Valid` no POST ✅. O `@NotBlank` no `Integer` continua e agora causa o bug **A** |
+| 3.3 Entidade exposta na API | 🟡 Parcial | GET e POST usam `CompanyRequest`/`CompanyResponse` com `CompanyMapper` ✅. Falta o **PUT**, que ainda recebe `Company` e não tem `@Valid` |
+| 3.4 Company chama o review de volta | ✅ Resolvido | A média agora chega pronta na mensagem e o `ReviewClient` não é mais chamado. Limpeza que sobrou: o arquivo `ReviewClient`, o parâmetro `ReviewClient` no construtor do `CompanyService`, o `@EnableFeignClients` e a dependência `spring-cloud-starter-openfeign` podem ser removidos |
+| 3.5 Consumer usa classe concreta / service conhece a mensagem | 🟡 Parcial | O consumer injeta `ICompanyService` ✅. O service ainda recebe `ReviewMessage` (o import de `CompanyService` no consumer também sobrou sem uso) |
+| 3.6 Configuração do RabbitMQ | 🟡 Parcial | Nome em propriedade, DLQ, retry, sem `RabbitTemplate` manual e classe movida para `config` ✅. Mas o listener não usa a fila nova: ver bug **C** |
+| 3.7 Paginação | ⏳ Pendente | |
+| 3.8 Location usa o id do parâmetro | ✅ Resolvido | Usa `companyResponse.id()` |
+| 3.8 `ResponseEntity<String>` no DELETE/PUT | 🟡 Mudou, mas não como sugerido | Virou `ResponseEntity` sem tipo (*raw type*), que o compilador marca com aviso. O ideal é `ResponseEntity<Void>` |
+| 3.8 Demais itens (`existsByNameIgnoreCase`, `companyExists` público, retornos `boolean`, `orElse(null)` em `updateCompanyRating`, `@Transactional`, `@GetMapping()`, `this.`, `ReviewMessage` como record) | ⏳ Pendente | |
+| 🆕 `CompanyMapper` é `@Component` com métodos `static` | 🟡 Novo detalhe | O mesmo ponto já apontado no `JobMapper` (4.10): ou classe `final` com construtor privado, ou métodos de instância injetados |
+
+**review_service**
+
+| Item | Status | O que foi feito / o que falta |
+|---|---|---|
+| 5.1 Update apaga a descrição | ⏳ Pendente | |
+| 5.2 `companyId` da URL ignorado | ⏳ Pendente | |
+| 5.3 PUT troca empresa / média não recalculada | ⏳ Pendente | Continua só o POST enviando mensagem. Agora que a média vai pronta na mensagem, basta chamar o envio também no PUT e no DELETE |
+| 5.4 Mensagem enviada pelo controller | ⏳ Pendente | Além disso, agora o `ReviewMessageProducer` (camada de mensageria) chama o `IReviewService` para calcular a média. A direção ideal é a contrária: o service calcula e chama o producer |
+| 5.5 Endpoint `/averagerating` | 🟡 Parcial | Endpoint removido ✅ (o company não precisa mais dele) e cálculo movido para o service ✅. Falta fazer a média **no banco** (`@Query("select avg(...)")`) em vez de carregar todas as reviews, e não devolver `0.0` quando não há reviews (use `null`) |
+| 5.6, 5.7, 5.8 | ⏳ Pendente | O `RabbitTemplate` manual continua no review (e o bean da fila deve sair, ver bug **C**) |
+| 🆕 Contrato da mensagem confuso | 🟡 Novo detalhe | O campo `rating` da `ReviewMessage` agora carrega a **média da empresa**, mas a mensagem continua com `id`, `title` e `description` **de uma review**. Quem lê o contrato vai achar que `rating` é a nota daquela review. A sugestão do item 3.4 resolve: um record só com o que importa, `CompanyRatingUpdatedEvent(Long companyId, Double averageRating, long reviewCount)` |
+
+**Pontos gerais**
+
+| Item | Status | Observação |
+|---|---|---|
+| 10.1 Bean Validation | 🟡 Parcial | Feito no company (corrigir o bug **A**). Falta no job e no review |
+| 10.2 `@RestControllerAdvice` com `ProblemDetail` | 🟡 Parcial | Feito no company (`CompanyServiceGlobalExceptionHandler`), estendendo `ResponseEntityExceptionHandler` ✅. O DELETE e o PUT ainda usam `boolean` em vez de lançar `CompanyNotFoundException`. Falta no job e no review |
+| job_service (4.x), gateway (6.x), config-server (7), service-registry (8), Docker/K8s (9), 10.3 a 10.9 | ⏳ Pendente | Sem alterações nesta rodada |
+
+#### Próximos passos sugeridos
+
+1. Corrigir os bugs **A**, **B** e **C** (são poucas linhas cada).
+2. Terminar o company: PUT com DTO e `@Valid`, DELETE/PUT lançando `CompanyNotFoundException`, limpeza do Feign e `@Transactional`.
+3. Escrever os primeiros testes do company (`@WebMvcTest`): POST válido → 201, POST inválido → 400, nome duplicado → 409, id inexistente → 404. Esses quatro testes teriam pego os bugs A e B.
+4. Seguir para o review_service, começando pelos 🔴 5.1, 5.2 e 5.3.
