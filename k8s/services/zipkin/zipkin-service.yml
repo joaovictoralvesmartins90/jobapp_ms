@@ -1,0 +1,13 @@
+# LoadBalancer no Minikube só recebe IP externo com "minikube tunnel" rodando
+apiVersion: v1
+kind: Service
+metadata:
+  name: zipkin
+spec:
+  selector:
+    app: zipkin
+  ports:
+    - protocol: TCP
+      port: 9411
+      targetPort: 9411
+  type: LoadBalancer

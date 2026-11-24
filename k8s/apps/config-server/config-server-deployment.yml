@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-server
+  labels:
+    app: config-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-server
+  template:
+    metadata:
+      labels:
+        app: config-server
+    spec:
+      # substitui o depends_on do compose: só inicia a aplicação quando as dependências aceitam conexão
+      initContainers:
+        - name: wait-for-dependencies
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              for dep in service-registry:8084; do
+                until nc -z -w 2 ${dep%:*} ${dep#*:}; do echo "aguardando $dep"; sleep 2; done
+              done
+      containers:
+        - name: config-server
+          # imagem construída localmente e carregada no Minikube (minikube image load)
+          image: jobapp/config-server:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8888
+          env:
+            # o profile docker já aponta para postgres, rabbitmq, service-registry etc.,
+            # que são os mesmos nomes dos Services do Kubernetes
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+            # heap da JVM proporcional ao limite de memória do container
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 768Mi
+          # startupProbe dá até 3 min para a JVM subir; liveness/readiness só começam depois
+          startupProbe:
+            tcpSocket:
+              port: 8888
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            tcpSocket:
+              port: 8888
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 8888
+            periodSeconds: 10
+            failureThreshold: 3

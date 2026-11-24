@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-registry
+  labels:
+    app: service-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-registry
+  template:
+    metadata:
+      labels:
+        app: service-registry
+    spec:
+      containers:
+        - name: service-registry
+          # imagem construída localmente e carregada no Minikube (minikube image load)
+          image: jobapp/service-registry:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8084
+          env:
+            # o profile docker já aponta para postgres, rabbitmq, service-registry etc.,
+            # que são os mesmos nomes dos Services do Kubernetes
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+            # heap da JVM proporcional ao limite de memória do container
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 768Mi
+          # startupProbe dá até 3 min para a JVM subir; liveness/readiness só começam depois
+          startupProbe:
+            tcpSocket:
+              port: 8084
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            tcpSocket:
+              port: 8084
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 8084
+            periodSeconds: 10
+            failureThreshold: 3

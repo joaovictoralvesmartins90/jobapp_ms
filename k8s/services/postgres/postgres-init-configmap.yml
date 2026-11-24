@@ -1,0 +1,10 @@
+# equivalente ao docker/postgres/init.sql do compose
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  init.sql: |
+    CREATE DATABASE companydb;
+    CREATE DATABASE jobdb;
+    CREATE DATABASE reviewdb;

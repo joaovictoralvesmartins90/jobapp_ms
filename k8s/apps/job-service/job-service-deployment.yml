@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-service
+  labels:
+    app: job-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-service
+  template:
+    metadata:
+      labels:
+        app: job-service
+    spec:
+      # substitui o depends_on do compose: só inicia a aplicação quando as dependências aceitam conexão
+      initContainers:
+        - name: wait-for-dependencies
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              for dep in postgres:5432 service-registry:8084 config-server:8888; do
+                until nc -z -w 2 ${dep%:*} ${dep#*:}; do echo "aguardando $dep"; sleep 2; done
+              done
+      containers:
+        - name: job-service
+          # imagem construída localmente e carregada no Minikube (minikube image load)
+          image: jobapp/job-service:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+          env:
+            # o profile docker já aponta para postgres, rabbitmq, service-registry etc.,
+            # que são os mesmos nomes dos Services do Kubernetes
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+            # heap da JVM proporcional ao limite de memória do container
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+            # habilita /actuator/health/liveness e /readiness mesmo fora da detecção automática de Kubernetes
+            - name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED
+              value: "true"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 768Mi
+          # startupProbe dá até 3 min para a JVM subir; liveness/readiness só começam depois
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8082
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8082
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8082
+            periodSeconds: 10
+            failureThreshold: 3

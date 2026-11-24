@@ -1,0 +1,23 @@
+# servers.json equivalente ao docker/pgadmin/servers.json do compose
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgadmin-config
+data:
+  PGADMIN_DEFAULT_EMAIL: admin@admin.com
+  PGADMIN_DEFAULT_PASSWORD: admin
+  PGADMIN_CONFIG_SERVER_MODE: "False"
+  servers.json: |
+    {
+      "Servers": {
+        "1": {
+          "Name": "jobapp",
+          "Group": "Servers",
+          "Host": "postgres",
+          "Port": 5432,
+          "MaintenanceDB": "jobapp",
+          "Username": "admin",
+          "SSLMode": "prefer"
+        }
+      }
+    }
