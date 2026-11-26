@@ -1203,3 +1203,68 @@ if (companyRepository.existsByNameIgnoreCaseAndIdNot(companyRequest.name(), comp
 4. **Validação no job:** starter + anotações no `JobRequest` + `@Valid` no PUT (e no PUT do company).
 5. **Testes de controller** (`@WebMvcTest`) para company e job, cobrindo 201, 204, 400, 404 e 409. Eles protegem as próximas refatorações desse tipo de efeito colateral.
 6. Depois disso: N+1 (4.7), salário em `BigDecimal` (4.8) e a limpeza dos itens 🟡.
+
+---
+
+### Revisão de 26/11/2026: após "Ajustes company_service parte 5 e parte 6"
+
+Analisados os commits `390c15b` (consumer lendo a fila do `application.properties`) e `8ddfd3f` (paginação no `findAll` e ajuste em `CompanyRequest`). Os dois mexeram só no company_service.
+
+#### ⚠️ Atenção primeiro
+
+##### 🆕🔴 I. As notas pararam de chegar ao company (efeito da correção do bug C)
+
+**O que acontece:** o `@RabbitListener` agora usa `${app.messaging.rating-queue}`, ou seja, escuta `company.rating.queue` (a fila com DLQ). 👍 Mas o review continua declarando e enviando para `"companyRatingQueue"` (`review_service/.../messaging/RabbitMQConfiguration.java` e `ReviewMessageProducer.java`). Antes os dois lados usavam o nome antigo e a mensagem chegava. Agora cada lado usa uma fila diferente: as mensagens se acumulam na `companyRatingQueue`, que ninguém consome, e a `averageRating` das empresas para de ser atualizada.
+
+**Como corrigir:** terminar a outra metade do bug **C**, no review:
+
+```properties
+# review_service: application.properties
+app.messaging.rating-queue=company.rating.queue
+```
+
+```java
+// ReviewMessageProducer
+public ReviewMessageProducer(RabbitTemplate rabbitTemplate,
+                             @Value("${app.messaging.rating-queue}") String queue) { ... }
+// ...
+rabbitTemplate.convertAndSend(queue, reviewMessage);
+```
+
+E remover o bean `companyRatingQueue()` do `RabbitMQConfiguration` do review: quem declara a fila (com a DLQ) é o company. As mensagens que ficaram presas na `companyRatingQueue` antiga podem ser vistas ou apagadas pelo painel (http://localhost:15672).
+
+#### Os bugs das rodadas anteriores
+
+| Bug | Status | Observação |
+|---|---|---|
+| **A.** `@NotBlank` em `Integer` derruba todo POST | ✅ Resolvido | O `@NotBlank` saiu de `employees`. Detalhe: ficou só `@PositiveOrZero`, e essa anotação aceita `null`. Ou seja, `employees` passou a ser **opcional**. Se a intenção é que seja obrigatório, use `@NotNull @PositiveOrZero` |
+| **C.** Listener escuta a fila antiga, sem DLQ | 🟡 Metade feita | Company corrigido ✅. O review ainda usa o nome antigo, o que causa o bug **I** |
+| **D**, **E**, **F**, **G** (job) | ⏳ Pendente | Os commits não mexeram no job_service |
+| **H.** PUT recusa a empresa manter o próprio nome | ⏳ Pendente | `updateCompany` ainda usa `companyExists(...)` |
+
+#### Status de cada item (só o que mudou)
+
+**company_service**
+
+| Item | Status | O que foi feito / o que falta |
+|---|---|---|
+| 3.2 Validação não funciona | 🟡 Quase lá | Bug **A** resolvido ✅. Falta o `@Valid` no PUT (item 3.3) e decidir se `employees` é obrigatório |
+| 3.6 Configuração do RabbitMQ | 🟡 Parcial | Do lado do company está completo ✅ (nome em propriedade, DLQ, listener usando a fila nova). Falta o review (bug **I**) |
+| 3.7 Paginação | ✅ Resolvido | `GET /companies` recebe `Pageable` com `@PageableDefault(size = 20, sort = "name")`, o repository pagina no banco e a resposta sai como `PagedModel`, que tem um formato de JSON estável (`content` + `page`). Ótima escolha: devolver `Page` direto gera aviso do Spring Data justamente por isso. Sugestões: limitar o tamanho máximo da página com `spring.data.web.pageable.max-page-size=100`, para ninguém pedir `?size=1000000`, e lembrar que quem consome a lista (job? gateway?) agora recebe um objeto em vez de um array |
+| 3.8 `@Transactional` | 🟡 Parcial | Sem mudança: o `findAll` paginado ainda não tem `@Transactional(readOnly = true)` |
+| 🆕 Imports sem uso | 🟡 Novo detalhe | `ReviewMessageConsumer` ganhou um import de `@Value` que não é usado (a propriedade é lida direto na anotação `@RabbitListener`). `ICompanyService` ainda importa `List`, que deixou de ser usado com a paginação, além de `Company`, `Optional` e `CompanyAlreadyExistsException`. *Ctrl+Alt+O* no IntelliJ resolve |
+
+**Pontos gerais**
+
+| Item | Status | Observação |
+|---|---|---|
+| 10.1 Bean Validation | 🟡 Parcial | Company: bug **A** resolvido; falta o `@Valid` no PUT. Job: sem mudança |
+| 10.3 Testes | ⏳ Pendente | O bug **I** é um bom exemplo do que um teste de integração com RabbitMQ (Testcontainers) pegaria: os dois serviços sobem sem erro, mas a mensagem não chega |
+
+#### Próximos passos sugeridos
+
+1. **Bug I**, já: hoje nenhuma review atualiza a média da empresa. São três linhas no review.
+2. **Bugs H, D e E**: os que ainda quebram o fluxo principal (PUT de empresa, POST de vaga, 404 do job).
+3. **Comunicação job → company:** bugs **F** e **G** e item 4.4, com o `CompanyGateway`.
+4. `@Valid` no PUT do company e validação no job.
+5. Testes de controller (`@WebMvcTest`) para company e job.
