@@ -4,12 +4,14 @@ import jakarta.validation.Valid;
 import jvam90.company_service.dtos.CompanyRequest;
 import jvam90.company_service.dtos.CompanyResponse;
 import jvam90.company_service.services.ICompanyService;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.data.web.PagedModel;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.net.URI;
-import java.util.List;
 
 @RestController
 @RequestMapping("/companies")
@@ -22,8 +24,8 @@ public class CompanyController {
     }
 
     @GetMapping()
-    public ResponseEntity<List<CompanyResponse>> findAll(){
-        return ResponseEntity.ok(companyService.findAll());
+    public PagedModel<CompanyResponse> findAll(@PageableDefault(size = 20, sort = "name")Pageable pageable){
+        return new PagedModel<>(companyService.findAll(pageable));
     }
 
     @GetMapping("/{companyId}")

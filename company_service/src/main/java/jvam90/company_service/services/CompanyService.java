@@ -9,10 +9,11 @@ import jvam90.company_service.mappers.CompanyMapper;
 import jvam90.company_service.messaging.dto.ReviewMessage;
 import jvam90.company_service.models.Company;
 import jvam90.company_service.repositories.CompanyRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -30,8 +31,8 @@ public class CompanyService implements ICompanyService{
     }
 
     @Override
-    public List<CompanyResponse> findAll() {
-        return companyRepository.findAll().stream().map(CompanyMapper::mapFromEntity).toList();
+    public Page<CompanyResponse> findAll(Pageable pageable) {
+        return companyRepository.findAll(pageable).map(CompanyMapper::mapFromEntity);
     }
 
     @Override
