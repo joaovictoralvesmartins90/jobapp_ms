@@ -1,6 +1,5 @@
 package jvam90.company_service.services;
 
-import jvam90.company_service.clients.ReviewClient;
 import jvam90.company_service.dtos.CompanyRequest;
 import jvam90.company_service.dtos.CompanyResponse;
 import jvam90.company_service.exceptions.CompanyAlreadyExistsException;
@@ -21,26 +20,29 @@ public class CompanyService implements ICompanyService{
 
     private final CompanyRepository companyRepository;
 
-    public CompanyService(CompanyRepository companyRepository, ReviewClient reviewClient) {
+    public CompanyService(CompanyRepository companyRepository) {
         this.companyRepository = companyRepository;
     }
 
-    @Override
-    public boolean companyExists(String companyName) {
+    @Transactional(readOnly = true)
+    private boolean companyExists(String companyName) {
         return companyRepository.findByNameIgnoreCase(companyName) != null;
     }
 
     @Override
+    @Transactional(readOnly = true)
     public Page<CompanyResponse> findAll(Pageable pageable) {
         return companyRepository.findAll(pageable).map(CompanyMapper::mapFromEntity);
     }
 
     @Override
+    @Transactional(readOnly = true)
     public CompanyResponse findCompanyById(Long id) {
         return companyRepository.findById(id).map(CompanyMapper::mapFromEntity).orElseThrow(() -> new CompanyNotFoundException(id));
     }
 
     @Override
+    @Transactional
     public CompanyResponse addCompany(CompanyRequest companyRequest) throws CompanyAlreadyExistsException {
         if(!companyExists(companyRequest.name())){
             Company company = CompanyMapper.mapFromRequest(companyRequest);
@@ -78,10 +80,11 @@ public class CompanyService implements ICompanyService{
     }
 
     @Override
+    @Transactional
     public void updateCompanyRating(ReviewMessage reviewMessage) {
-        Company company = companyRepository.findById(reviewMessage.getCompanyId()).orElse(null);
+        Company company = companyRepository.findById(reviewMessage.companyId()).orElse(null);
         if(company != null){
-            company.setAverageRating(reviewMessage.getRating());
+            company.setAverageRating(reviewMessage.rating());
             companyRepository.save(company);
         }
     }

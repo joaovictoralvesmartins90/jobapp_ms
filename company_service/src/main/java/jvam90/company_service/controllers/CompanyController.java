@@ -23,19 +23,19 @@ public class CompanyController {
         this.companyService = companyService;
     }
 
-    @GetMapping()
+    @GetMapping
     public PagedModel<CompanyResponse> findAll(@PageableDefault(size = 20, sort = "name")Pageable pageable){
         return new PagedModel<>(companyService.findAll(pageable));
     }
 
     @GetMapping("/{companyId}")
     public ResponseEntity<CompanyResponse> findCompanyById(@PathVariable Long companyId){
-        return ResponseEntity.ok(this.companyService.findCompanyById(companyId));
+        return ResponseEntity.ok(companyService.findCompanyById(companyId));
     }
 
     @PostMapping()
     public ResponseEntity<CompanyResponse> addCompany(@RequestBody @Valid CompanyRequest company){
-        CompanyResponse companyResponse = this.companyService.addCompany(company);
+        CompanyResponse companyResponse = companyService.addCompany(company);
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{companyId}")
@@ -46,13 +46,13 @@ public class CompanyController {
 
     @DeleteMapping("/{companyId}")
     public ResponseEntity<Void> deleteCompany(@PathVariable Long companyId){
-        this.companyService.deleteCompany(companyId);
+        companyService.deleteCompany(companyId);
         return ResponseEntity.noContent().build();
     }
 
     @PutMapping("/{companyId}")
     public ResponseEntity<Void> updateCompany(@RequestBody CompanyRequest companyRequest, @PathVariable Long companyId){
-        this.companyService.updateCompany(companyRequest, companyId);
+        companyService.updateCompany(companyRequest, companyId);
         return ResponseEntity.noContent().build();
     }
 }

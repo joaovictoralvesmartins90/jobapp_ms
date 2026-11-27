@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Optional;
 
 public interface ICompanyService {
-    boolean companyExists(String companyName);
     Page<CompanyResponse> findAll(Pageable pageable);
     CompanyResponse findCompanyById(Long id);
     CompanyResponse addCompany(CompanyRequest company) throws CompanyAlreadyExistsException;
